@@ -25,6 +25,7 @@ validation_loss, validation_accuracy = model.evaluate(x_test, y_test)
 print(validation_accuracy)
 
 # make a prediction
-prediction = model.predict([x_train[:1]])
+prediction = model.predict([x_test])
 print(np.argmax(prediction[0]))
-plt.imshow(x_train[:1])
+plt.imshow(x_test[0])
+plt.show()
