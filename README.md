@@ -1,2 +1,2 @@
 # Chatbot
-Conversation AI chatbot. Implementation with seq2seq architecture using Neural Networks in Python.
+Conversation AI chatbot. Implementation with seq2seq architecture using keras in Python.
