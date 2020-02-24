@@ -146,13 +146,13 @@ def train():
     # validation data
     valX = encode_sequences(tokenizer, in_seq_length, val_in_sequences)
     valY = encode_sequences(tokenizer, out_seq_length, val_out_sequences)
-    valY = encode_output(tokenizer, vocab_size)
+    valY = encode_output(valY, vocab_size)
     
     model = seq2seq_model(vocab_size, vocab_size, in_seq_length, out_seq_length, 256)
     checkpoint = ModelCheckpoint(pre.MODEL_FN, monitor='val_loss', verbose=1,
                                  save_best_only=True, mode='min')
     model.fit(trainX, trainY, epochs=1, batch_size=64, validation_data=(valX, valY), 
-              callbacks=[checkpoint], verbose=2)       
+              callbacks=[checkpoint], verbose=1)       
     
     # save the tokenizer so it can be used for prediction
     pre.save_object(tokenizer, pre.TOKENIZER_PKL_FN)

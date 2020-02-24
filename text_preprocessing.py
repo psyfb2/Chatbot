@@ -14,8 +14,8 @@ TRAIN_PKL_FN        = "data/train_set.pkl"
 TEST_PKL_FN         = "data/test_set.pkl"
 VAL_PKL_FN          = "data/validation_set.pkl"
 TOKENIZER_PKL_FN    = "data/tokenizer.pkl"
-MODEL_IMAGE_FN      = "models/model.png"
-MODEL_FN            = "models/model.h5"
+MODEL_IMAGE_FN      = "saved_models/model.png"
+MODEL_FN            = "saved_models/model.h5"
 
 '''
 Data is in the following format
