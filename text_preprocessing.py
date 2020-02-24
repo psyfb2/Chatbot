@@ -7,10 +7,11 @@ import numpy as np
 import string
 import pickle
 import re
-from unicodedata import normalize
 
 TRAIN_FN       = "data/train_self_original_no_cands.txt"
 TEST_FN        = "data/test_self_original_no_cands.txt"
+TRAIN_PKL_FN   = "data/train_set.pkl"
+TEST_PKL_FN    = "data/test_set.pkl"
 MODEL_IMAGE_FN = "models/model.png"
 MODEL_FN       = "models/model.h5"
 
@@ -61,17 +62,22 @@ def get_persona_index(personas, single_pers):
     # have the same sentences but in different order and sometimes with different
     # punctuation and spelling
     
+    #if single_pers == a:
+        #breakpoint()
+    
     # first number character for comparison
     single_pers_re = [sentence[1:] for sentence in single_pers]
     
+    shared_sentences = len(single_pers) - 1
+    
     for p_index, persona in enumerate(personas):
         persona_re = [sentence[1:] for sentence in persona]
-        # different personas don't share the same sentences
+        # different personas don't share the same 4 sentences
         count = 0
         for sentence in single_pers_re:
             if sentence in persona_re:
                 count += 1
-                if count >= 1:
+                if count >= shared_sentences:
                     # these are the same personas, save one with 5 sentences and return index
                     if(len(single_pers) == 5 and len(persona) != 5):
                         personas[p_index] = single_pers
@@ -92,19 +98,12 @@ def load_dataset(filename):
         for line in lines:
             line = line.strip()
             if "your persona:" in line and line[0] in ['1', '2', '3', '4', '5']:
-                # line is a persona, remove contractions from this persona sentence
-                # as the same personas sometimes come with or without contractions
-                # e.g. i've a small rabbit = i have a small rabbit
-                line = remove_contractions(line)
                 single_pers.append(line)
             else:
                 # add persona to list of personas
                 if len(single_pers) != 0:
-                    try:
-                        p_index = get_persona_index(personas, single_pers)
-                    except ValueError:
-                        personas.append(single_pers)
-                        p_index = len(personas) - 1
+                    personas.append(single_pers)
+                    p_index = len(personas) - 1
                     single_pers = []
                 # line is a message and reply seperated by tab
                 # which is ascociated with the last read persona
@@ -114,34 +113,66 @@ def load_dataset(filename):
     
 ''' Takes [["message text", "reply text", pindex], ...] 
     and returns the cleaned version in numpy array '''
-def clean_pairs(translations):
+def clean_triples(msg_reply):
     cleaned = []
     
+    for triple in msg_reply:
+        clean_msg_reply = []
+        
+        # triple[0] is message starting with a number
+        # triple[1] is the reply to learn 
+        # triple[2] the persona index
+        triple[0] = clean_line(remove_first_num(triple[0]))
+        clean_msg_reply.append(triple[0])
+        triple[1] = clean_line(triple[1])
+        clean_msg_reply.append(triple[1])
+        clean_msg_reply.append(triple[2])
+        
+        cleaned.append(clean_msg_reply)
+        
+    return np.array(cleaned)
+        
+
+''' Clean a single line of text by
+    removing non-printable characters
+    make lower case
+    removing punctuation apart from full stop and comma 
+    removes contractions e.g. i've -> i have'''
+def clean_line(line):
     # only include printable characters and remove punctuation
-    re_punc = re.compile('[%s]' % re.escape(string.punctuation))
+    # apart from full stop and comma characters
+    punc = string.punctuation
+    punc = punc.replace('.', "")
+    punc = punc.replace(',', "")
+
+    re_punc = re.compile('[%s]' % re.escape(punc))
     re_print = re.compile('[^%s]' % re.escape(string.printable))
     
-    for pair in translations:
-        clean_pairs = []
-        for line in pair:
-            # normalize unicode characters
-            line = normalize('NFD', line).encode('ascii', 'ignore')
-            line = line.decode('UTF-8')
-            
-            line = line.split()
-            # make lower case
-            line = [word.lower() for word in line]
-            # remove punctuation
-            line = [re_punc.sub('', w) for w in line]
-            # remove non-printable chars
-            line = [re_print.sub('', w) for w in line]
-            # remove tokens which include numbers
-            line = [w for w in line if w.isalpha()]
-            
-            # store the string instead of list of tokens
-            clean_pairs.append(' '.join(line))
-        cleaned.append(clean_pairs)
-    return np.array(cleaned)
+    line = remove_contractions(line)
+    line = line.split()
+    # make lower case
+    line = [word.lower() for word in line]
+    # remove punctuation
+    line = [re_punc.sub('', w) for w in line]
+    # remove non-printable chars
+    line = [re_print.sub('', w) for w in line]
+    
+    return ' '.join(line)
+    
+''' Remove the first number from a string '''
+def remove_first_num(strr):
+    for i in range(len(strr)):
+        if strr[i] in string.digits:
+            # found the first number
+            count = 1
+            while True:
+                if i + count >= len(strr) or strr[i + count] not in string.digits:
+                    indicies = [x for x in range(i, i + count)]
+                    cpy = [strr[j] for j in range(len(strr)) if j not in indicies]
+                    return ''.join(cpy)
+                count += 1
+    # string does not contain any numbers
+    return strr
 
 ''' Save an object using pickle as the filename '''   
 def save_object(obj, filename, verbose=1):
@@ -171,28 +202,24 @@ def mean_seq_length(lines):
     return sum(lengths) // len(lengths)
 
 ''' Saves the full dataset, train and test set 
-    as numpy array of [["english sentence", "german sentence"], ...] in pickle files'''
-'''
-def save_dataset():
-    # save cleaned pairs to pickle object
-    doc = load_text_file(DATASET_FN)
-    pairs = to_pairs(doc)
-    pairs = clean_pairs(pairs)
+    as numpy array of ([["message", "reply", p_index], ...], personas) in pickle files'''
+def save_dataset(load_fn, save_fn):
+    personas, msg_reply = load_dataset(load_fn)
     
-    # only can use a subset of all pairs for speed of training for now
-    n_sentences = 10000
-    np.random.shuffle(pairs)
-    dataset = pairs[:n_sentences, :]
-    train, test = dataset[:9000], dataset[9000:]
+    # clean the personas and message, reply pairs
+    triples = clean_triples(msg_reply)
+    for i in range(len(personas)):
+        for j in range(len(personas[i])):
+            personas[i][j] = clean_line(remove_first_num(personas[i][j]))
+        personas[i] = ' '.join(personas[i])
+    personas = np.array(personas)
     
-    save_object(dataset, CLEANED_PAIRS_PKL_FN)
-    save_object(train, TRAIN_SET_FN)
-    save_object(test, TEST_SET_FN)
+    save_object((triples, personas), save_fn)
     
     # check that cleaned text is as intended
     for i in range(100):
-        print('[%s] => [%s]' % (pairs[i, 0], pairs[i, 1]), sep='\n\n')
-    '''
+        print('[%s]\n[%s] => [%s]' % (personas[int(triples[i, 2])], triples[i, 0], triples[i, 1]))
+        print("\n")
 
 if __name__ == '__main__':
-    personas, msg_reply = load_dataset(TEST_FN)
+    save_dataset(TRAIN_FN, TRAIN_PKL_FN)
