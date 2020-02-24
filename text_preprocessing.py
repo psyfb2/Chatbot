@@ -8,12 +8,14 @@ import string
 import pickle
 import re
 
-TRAIN_FN       = "data/train_self_original_no_cands.txt"
-TEST_FN        = "data/test_self_original_no_cands.txt"
-TRAIN_PKL_FN   = "data/train_set.pkl"
-TEST_PKL_FN    = "data/test_set.pkl"
-MODEL_IMAGE_FN = "models/model.png"
-MODEL_FN       = "models/model.h5"
+TRAIN_FN            = "data/train_self_original_no_cands.txt"
+TEST_FN             = "data/valid_self_original_no_cands.txt"
+TRAIN_PKL_FN        = "data/train_set.pkl"
+TEST_PKL_FN         = "data/test_set.pkl"
+VAL_PKL_FN          = "data/validation_set.pkl"
+TOKENIZER_PKL_FN    = "data/tokenizer.pkl"
+MODEL_IMAGE_FN      = "models/model.png"
+MODEL_FN            = "models/model.h5"
 
 '''
 Data is in the following format
@@ -144,6 +146,7 @@ def clean_line(line):
     punc = string.punctuation
     punc = punc.replace('.', "")
     punc = punc.replace(',', "")
+    punc = punc.replace('_', "")
 
     re_punc = re.compile('[%s]' % re.escape(punc))
     re_print = re.compile('[^%s]' % re.escape(string.printable))
@@ -190,10 +193,10 @@ def max_seq_length(lines):
     return max([len(line.split()) for line in lines])
 
 ''' Given a list of cleaned lines ["sentence 1", "sentence 2", ...] 
-    returns the third quartile length of the sentences '''
-def third_quartile_seq_length(lines):
+    returns the sequence length so that 90% of sequence lengths are below this'''
+def seq_length(lines):
     lengths = sorted([len(line.split()) for line in lines])
-    return lengths[3 * (len(lengths) // 4)]
+    return lengths[9 * (len(lengths) // 10)]
 
 ''' Given a list of cleaned lines ["sentence 1", "sentence 2", ...] 
     returns the mean length of the sentences '''
@@ -201,7 +204,7 @@ def mean_seq_length(lines):
     lengths = [len(line.split()) for line in lines]
     return sum(lengths) // len(lengths)
 
-''' Saves the full dataset, train and test set 
+''' Saves the dataset, if given test set will split into validation and test
     as numpy array of ([["message", "reply", p_index], ...], personas) in pickle files'''
 def save_dataset(load_fn, save_fn):
     personas, msg_reply = load_dataset(load_fn)
@@ -214,7 +217,14 @@ def save_dataset(load_fn, save_fn):
         personas[i] = ' '.join(personas[i])
     personas = np.array(personas)
     
-    save_object((triples, personas), save_fn)
+    if load_fn == TEST_FN and save_fn == TEST_PKL_FN:
+        validation = triples[:804]
+        test = triples[804:]
+        
+        save_object((validation, personas), VAL_PKL_FN)
+        save_object((test, personas), TEST_PKL_FN)
+    else:
+        save_object((triples, personas), save_fn)
     
     # check that cleaned text is as intended
     for i in range(100):
@@ -222,4 +232,4 @@ def save_dataset(load_fn, save_fn):
         print("\n")
 
 if __name__ == '__main__':
-    save_dataset(TRAIN_FN, TRAIN_PKL_FN)
+    save_dataset(TEST_FN, TEST_PKL_FN)

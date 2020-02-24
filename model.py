@@ -112,45 +112,50 @@ def evaluate_by_auto_metrics(model, sources, dataset_not_encoded, tokenizer, ver
     print("BLEU-3: %f" % corpus_bleu(target_sentences, predicted_sentences, weights=(0.3, 0.3, 0.3, 0)))
     print("BLEU-4: %f" % corpus_bleu(target_sentences, predicted_sentences, weights=(0.25, 0.25, 0.25, 0.25)))
         
-        
 
 def train():
-    # load dataset
-    dataset = pre.load_object(pre.CLEANED_PAIRS_PKL_FN)
-    train = pre.load_object(pre.TRAIN_SET_FN)
-    test = pre.load_object(pre.TEST_SET_FN)
+    # load training and validation set
+    train, train_personas = pre.load_object(pre.TRAIN_PKL_FN)
+    val, val_personas = pre.load_object(pre.VAL_PKL_FN)
     
-    # english tokenizer
-    eng_tokenizer = fit_tokenizer(dataset[:, 0])
-    eng_vocab_size = len(eng_tokenizer.word_index) + 1
-    eng_length = pre.max_seq_length(dataset[:, 0])
+    # train is a numpy array containing triples [message, reply, persona_index]
+    # personas is an numpy array of strings for the personas
     
-    print('English vocab size: %d' % eng_vocab_size)
-    print('English max sequence length: %d' % eng_length)
+    # fit tokenizer over training data
+    tokenizer = fit_tokenizer( np.concatenate([train_personas, train[:, 0], train[:, 1]]) )
+    vocab_size = len(tokenizer.word_index) + 1
     
-    # german tokenizer
-    ger_tokenizer = fit_tokenizer(dataset[:, 1])
-    ger_vocab_size = len(ger_tokenizer.word_index) + 1
-    ger_length = pre.max_seq_length(dataset[:, 1])
+    # sequences are persona + msg (prepending the persona to message)
+    in_sequences = np.array([train_personas[int(row[2])] + ' ' + row[0] for row in train])
+    out_sequences = train[:, 1]
+    in_seq_length = pre.seq_length(in_sequences)
+    out_seq_length = pre.seq_length(out_sequences)
     
-    print('German vocab size: %d' % ger_vocab_size)
-    print('German max sequence length: %d' % ger_length)
+    val_in_sequences = np.array([val_personas[int(row[2])] + ' ' + row[0] for row in val])
+    val_out_sequences = val[:, 1]
     
+    print('Vocab size: %d' % vocab_size)
+    print('Max input sequence length: %d' % in_seq_length)
+    print('Max output sequence length: %d' % out_seq_length)
+
     # prepare training data
-    trainX = encode_sequences(ger_tokenizer, ger_length, train[:, 1])
-    trainY = encode_sequences(eng_tokenizer, eng_length, train[:, 0])
-    trainY = encode_output(trainY, eng_vocab_size)
+    trainX = encode_sequences(tokenizer, in_seq_length, in_sequences)
+    trainY = encode_sequences(tokenizer, out_seq_length, out_sequences)
+    trainY = encode_output(trainY, vocab_size)
     
     # validation data
-    testX = encode_sequences(ger_tokenizer, ger_length, test[:, 1])
-    testY = encode_sequences(eng_tokenizer, eng_length, test[:, 0])
-    testY = encode_output(testY, eng_vocab_size)
+    valX = encode_sequences(tokenizer, in_seq_length, val_in_sequences)
+    valY = encode_sequences(tokenizer, out_seq_length, val_out_sequences)
+    valY = encode_output(tokenizer, vocab_size)
     
-    model = seq2seq_model(ger_vocab_size, eng_vocab_size, ger_length, eng_length, 256)
+    model = seq2seq_model(vocab_size, vocab_size, in_seq_length, out_seq_length, 256)
     checkpoint = ModelCheckpoint(pre.MODEL_FN, monitor='val_loss', verbose=1,
                                  save_best_only=True, mode='min')
-    model.fit(trainX, trainY, epochs=3, batch_size=64, validation_data=(testX, testY), 
-              callbacks=[checkpoint], verbose=2)        
+    model.fit(trainX, trainY, epochs=1, batch_size=64, validation_data=(valX, valY), 
+              callbacks=[checkpoint], verbose=2)       
+    
+    # save the tokenizer so it can be used for prediction
+    pre.save_object(tokenizer, pre.TOKENIZER_PKL_FN)
     
 def evaluate():
     # load dataset
@@ -177,4 +182,4 @@ def evaluate():
     
     
 if __name__ == '__main__':
-    evaluate()
+    train()
