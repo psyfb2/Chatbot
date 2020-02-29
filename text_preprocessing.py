@@ -12,10 +12,18 @@ TRAIN_FN            = "data/train_self_original_no_cands.txt"
 TEST_FN             = "data/valid_self_original_no_cands.txt"
 TRAIN_PKL_FN        = "data/train_set.pkl"
 TEST_PKL_FN         = "data/test_set.pkl"
-VAL_PKL_FN          = "data/validation_set.pkl"
 TOKENIZER_PKL_FN    = "data/tokenizer.pkl"
+GLOVE_FN            = "data/glove.42B.300d.txt"
 MODEL_IMAGE_FN      = "saved_models/model.png"
 MODEL_FN            = "saved_models/model.h5"
+
+# punctuation which will not be removed from training/test data
+ALLOWED_CHARS = ['.', ',', '_', '?']
+
+def remove_allowed_chars(punc_str):
+    for char in ALLOWED_CHARS:
+        punc_str = punc_str.replace(char, "")
+    return punc_str
 
 '''
 Data is in the following format
@@ -41,6 +49,37 @@ but also classify which reply from the candidates is the ground truth.
 https://github.com/huggingface/transfer-learning-conv-ai/blob/master/example_entry.py
 
 '''
+
+''' Load GloVe embedding containing only those words within the tokenizer vocab '''
+def load_glove_embedding(tokenizer, glove_filename=GLOVE_FN):
+    # load glove as dictionary {word : embedding, ...} for only the words in
+    # the tokenizer vocabulary
+    glove_file = open(glove_filename, mode="rt", encoding="utf-8")
+    word_dict = dict()
+    for line in glove_file:
+        values = line.split()
+        word = values[0]
+        word_dict[word] = np.asarray(values[1:], dtype="float32")
+    glove_file.close()
+    
+    # create an embedding matrix which is indexed by words in training docs
+    vocab_size= len(tokenizer.word_index) + 1
+    dimensions = 50
+    if "100" in glove_filename:
+        dimensions = 100
+    elif "200" in glove_filename:
+        dimensions = 200
+    else:
+        dimensions = 300
+        
+    embedding_matrix = np.zeros((vocab_size, dimensions))
+    for word, unique_index in tokenizer.word_index.items():
+        # get the embedding vector from the dictionary created above
+        vec = word_dict.get(word)
+        if vec is not None:
+            embedding_matrix[unique_index] = vec
+    
+    return embedding_matrix
 
 def remove_contractions(sentence):
     sentence = re.sub(r"won\'t", "will not", sentence)
@@ -143,10 +182,7 @@ def clean_triples(msg_reply):
 def clean_line(line):
     # only include printable characters and remove punctuation
     # apart from full stop and comma characters
-    punc = string.punctuation
-    punc = punc.replace('.', "")
-    punc = punc.replace(',', "")
-    punc = punc.replace('_', "")
+    punc = remove_allowed_chars(string.punctuation)
 
     re_punc = re.compile('[%s]' % re.escape(punc))
     re_print = re.compile('[^%s]' % re.escape(string.printable))
@@ -217,14 +253,7 @@ def save_dataset(load_fn, save_fn):
         personas[i] = ' '.join(personas[i])
     personas = np.array(personas)
     
-    if load_fn == TEST_FN and save_fn == TEST_PKL_FN:
-        validation = triples[:804]
-        test = triples[804:]
-        
-        save_object((validation, personas), VAL_PKL_FN)
-        save_object((test, personas), TEST_PKL_FN)
-    else:
-        save_object((triples, personas), save_fn)
+    save_object((triples, personas), save_fn)
     
     # check that cleaned text is as intended
     for i in range(100):
@@ -232,4 +261,4 @@ def save_dataset(load_fn, save_fn):
         print("\n")
 
 if __name__ == '__main__':
-    save_dataset(TEST_FN, TEST_PKL_FN)
+    save_dataset(TRAIN_FN, TRAIN_PKL_FN)

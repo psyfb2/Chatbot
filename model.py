@@ -10,18 +10,29 @@ from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
 from keras.utils.vis_utils import plot_model
-from keras.models import Sequential
 from keras.models import load_model
+from keras.models import Sequential
+from keras.models import Model
 from keras.layers import LSTM
 from keras.layers import Dense
 from keras.layers import Embedding
 from keras.layers import RepeatVector
 from keras.layers import TimeDistributed
+from keras.layers import Input
 from keras.callbacks import ModelCheckpoint
+
+
+LSTM_DIM = 512
+EPOCHS = 10
+BATCH_SIZE = 64
+CLIP_NORM = 5
+DROPOUT = 0.2
+START_SEQ_TOKEN = "startseqq"
+END_SEQ_TOKEN   = "stopseqq"
 
 ''' Returns a keras tokenizer fitted on the given text '''
 def fit_tokenizer(lines):
-    tokenizer = Tokenizer()
+    tokenizer = Tokenizer(filters=pre.remove_allowed_chars('!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n'))
     tokenizer.fit_on_texts(lines)
     return tokenizer
 
@@ -46,22 +57,51 @@ def encode_output(sequences, vocab_size):
     y = y.reshape(sequences.shape[0], sequences.shape[1], vocab_size)
     return y
 
-def seq2seq_model(src_vocab, tar_vocab, src_timesteps, tar_timesteps, n_units):
+def autoencoder_model(vocab_size, src_timesteps, tar_timesteps, n_units, embedding_matrix):
     model = Sequential()
-    model.add(Embedding(src_vocab, n_units, input_length=src_timesteps, mask_zero=True))
+    e_dim = embedding_matrix.shape[1]
+    model.add(Embedding(vocab_size, e_dim, weights=[embedding_matrix], input_length=src_timesteps, trainable=True, mask_zero=True))
     
     # encoder
     model.add(LSTM(n_units))
     model.add(RepeatVector(tar_timesteps))
     
-    
     # decoder
     model.add(LSTM(n_units, return_sequences=True))
-    model.add(TimeDistributed(Dense(tar_vocab, activation='softmax')))
+    model.add(TimeDistributed(Dense(vocab_size, activation='softmax')))
+
+    model.compile(optimizer='adam', loss='categorical_crossentropy')
+    model.summary()
+    plot_model(model, to_file=pre.MODEL_IMAGE_FN, show_shapes=True)
+    return model
+
+def seq2seq_model(vocab_size, src_timesteps, tar_timesteps, n_units, embedding_matrix):    
+    # encoder and decoder share the same embedding
+    e_dim = embedding_matrix.shape[1]
+    embedding = Embedding(vocab_size, e_dim, weights=[embedding_matrix], input_length=src_timesteps, trainable=True, mask_zero=True)
+    
+    # LSTM 4-layer encoder
+    input_utterence = Input(shape=(None,))
+    encoder_inputs = embedding(input_utterence)
+    encoder = LSTM(n_units, return_states=True, dropout=DROPOUT)
+    # get back the last hidden state and last cell state from the encoder LSTM
+    encoder_output, hidden_state, cell_state = encoder(encoder_inputs)
+    
+    
+    # LSTM 4-layer decoder using teacher forcing
+    target_utterence = Input(shape=(None,))
+    decoder_inputs = embedding(target_utterence)
+    # decoder will output hidden state of all it's timesteps along with
+    # last hidden state and last cell state which is used for inference model
+    decoder = LSTM(n_units, return_sequences=True, return_state=True, dropout=DROPOUT)
+    decoder_outputs, _, _ = decoder(decoder_inputs, initial_state=[hidden_state, cell_state])
+    # apply softmax over the whole vocab for every decoder output hidden state
+    outputs = TimeDistributed(Dense(vocab_size, activation="softmax"))(decoder_outputs)
     
     # treat as a multi-class classification problem where need to predict
     # P(yi | x1, x2, ..., xn, y1, y2, ..., yi-1)
-    model.compile(optimizer='adam', loss='categorical_crossentropy')
+    model = Model([input_utterence, target_utterence], outputs)
+    model.compile(optimizer='adam', loss='categorical_crossentropy', clipnorm=CLIP_NORM)
     model.summary()
     plot_model(model, to_file=pre.MODEL_IMAGE_FN, show_shapes=True)
     return model
@@ -113,49 +153,52 @@ def evaluate_by_auto_metrics(model, sources, dataset_not_encoded, tokenizer, ver
     print("BLEU-4: %f" % corpus_bleu(target_sentences, predicted_sentences, weights=(0.25, 0.25, 0.25, 0.25)))
         
 
-def train():
+def train_seq2seq():
     # load training and validation set
     train, train_personas = pre.load_object(pre.TRAIN_PKL_FN)
-    val, val_personas = pre.load_object(pre.VAL_PKL_FN)
+    # fit tokenizer over training data and start, stop tokens
+    tokenizer = fit_tokenizer( np.concatenate([train_personas, train[:, 0], train[:, 1], np.array([START_SEQ_TOKEN, END_SEQ_TOKEN])]) )
+    vocab_size = len(tokenizer.word_index) + 1
     
     # train is a numpy array containing triples [message, reply, persona_index]
     # personas is an numpy array of strings for the personas
     
-    # fit tokenizer over training data
-    tokenizer = fit_tokenizer( np.concatenate([train_personas, train[:, 0], train[:, 1]]) )
-    vocab_size = len(tokenizer.word_index) + 1
+    # need 3 arrays to fit the seq2seq model as will be using teacher forcing
+    # encoder_input which is persona prepended to message, integer encoded and padded
+    # for all messages so will have shape (utterances, in_seq_length)
     
-    # sequences are persona + msg (prepending the persona to message)
-    in_sequences = np.array([train_personas[int(row[2])] + ' ' + row[0] for row in train])
-    out_sequences = train[:, 1]
-    in_seq_length = pre.seq_length(in_sequences)
-    out_seq_length = pre.seq_length(out_sequences)
+    # decoder_input which is the reponse to the input, integer_encoded and padded
+    # for all messages so will have shape (utterances, out_seq_length)
     
-    val_in_sequences = np.array([val_personas[int(row[2])] + ' ' + row[0] for row in val])
-    val_out_sequences = val[:, 1]
+    # decoder_target which is the response to the input with an end of sequence token
+    # appended, one_hot encoded and padded. shape (utterances, out_seq_length, vocab_size)
+    encoder_input  = np.array([train_personas[int(row[2])] + ' ' + row[0] for row in train])
+    decoder_input  = np.array([START_SEQ_TOKEN + ' ' + row[1] for row in train])
+    decoder_target = np.array([row[1] + ' ' + END_SEQ_TOKEN for row in train])
+    
+    in_seq_length = pre.max_seq_length(encoder_input)
+    out_seq_length = pre.max_seq_length(decoder_input)
     
     print('Vocab size: %d' % vocab_size)
-    print('Max input sequence length: %d' % in_seq_length)
-    print('Max output sequence length: %d' % out_seq_length)
+    print('Input sequence length: %d' % in_seq_length)
+    print('Output sequence length: %d' % out_seq_length)
 
     # prepare training data
-    trainX = encode_sequences(tokenizer, in_seq_length, in_sequences)
-    trainY = encode_sequences(tokenizer, out_seq_length, out_sequences)
-    trainY = encode_output(trainY, vocab_size)
+    encoder_input  = encode_sequences(tokenizer, in_seq_length, encoder_input)
+    decoder_input  = encode_sequences(tokenizer, out_seq_length, decoder_input)
+    decoder_target = encode_sequences(tokenizer, out_seq_length, decoder_target)
+    decoder_target = encode_output(decoder_target, vocab_size)
     
-    # validation data
-    valX = encode_sequences(tokenizer, in_seq_length, val_in_sequences)
-    valY = encode_sequences(tokenizer, out_seq_length, val_out_sequences)
-    valY = encode_output(valY, vocab_size)
+    # load GloVe embeddings
+    embedding_matrix = pre.load_glove_embedding(tokenizer)
     
-    model = seq2seq_model(vocab_size, vocab_size, in_seq_length, out_seq_length, 256)
-    checkpoint = ModelCheckpoint(pre.MODEL_FN, monitor='val_loss', verbose=1,
-                                 save_best_only=True, mode='min')
-    model.fit(trainX, trainY, epochs=1, batch_size=64, validation_data=(valX, valY), 
-              callbacks=[checkpoint], verbose=1)       
+    model = seq2seq_model(vocab_size, in_seq_length, out_seq_length, LSTM_DIM, embedding_matrix)
+    model.fit([encoder_input, decoder_input], decoder_target, 
+              epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)       
     
-    # save the tokenizer so it can be used for prediction
+    # save the tokenizer and model so it can be used for prediction
     pre.save_object(tokenizer, pre.TOKENIZER_PKL_FN)
+    model.save(pre.MODEL_FN)
     
 def evaluate():
     # load dataset
@@ -182,4 +225,4 @@ def evaluate():
     
     
 if __name__ == '__main__':
-    train()
+    train_seq2seq()
