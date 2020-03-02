@@ -7,18 +7,27 @@ import numpy as np
 import string
 import pickle
 import re
+from keras.preprocessing.text import Tokenizer
+from keras.preprocessing.sequence import pad_sequences
+from keras.utils import to_categorical
 
 TRAIN_FN            = "data/train_self_original_no_cands.txt"
 TEST_FN             = "data/valid_self_original_no_cands.txt"
 TRAIN_PKL_FN        = "data/train_set.pkl"
 TEST_PKL_FN         = "data/test_set.pkl"
 TOKENIZER_PKL_FN    = "data/tokenizer.pkl"
+MAX_OUT_LEN_PKL_FN  = "data/max_out_len.pkl"
+MAX_IN_LEN_PKL_FN   = "data/max_in_len.pkl"
 GLOVE_FN            = "data/glove.6B.300d.txt"
 MODEL_IMAGE_FN      = "saved_models/model.png"
 MODEL_FN            = "saved_models/model.h5"
+ENCODER_MODEL_FN    = "saved_models/encoder_model.h5"
+DECODER_MODEL_FN    = "saved_models/decoder_model.h5"
 
 # punctuation which will not be removed from training/test data
 ALLOWED_CHARS = ['.', ',', '_', '?']
+START_SEQ_TOKEN = "startseqq"
+END_SEQ_TOKEN   = "stopseqq"
 
 def remove_allowed_chars(punc_str):
     for char in ALLOWED_CHARS:
@@ -80,6 +89,41 @@ def load_glove_embedding(tokenizer, glove_filename=GLOVE_FN):
             embedding_matrix[unique_index] = vec
     
     return embedding_matrix
+
+
+''' Returns a keras tokenizer fitted on the given text '''
+def fit_tokenizer(lines):
+    tokenizer = Tokenizer(filters=remove_allowed_chars('!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n'))
+    tokenizer.fit_on_texts(lines)
+    return tokenizer
+
+''' Given a tokenizer, pad length, numpy array of cleaned lines
+    returns numpy array of padded and integer encoded sequences
+    e.g. ["a cleaned sentence", ...] => [[5, 20, 30], ...] '''
+def encode_sequences(tokenizer, length, lines):
+    X = tokenizer.texts_to_sequences(lines)
+    X = pad_sequences(X, maxlen=length, padding='post')
+    return X
+
+''' Each sequeunce in sequences will produce a matrix of one hot encoded words.
+    Use this to perform catagorical crossentropy on the target sequence '''
+def encode_output(sequences, vocab_size):
+    ylist = []
+    for sequence in sequences:
+        # each target sequence produces a matrix where each row is a word one hot encoded
+        # and there are vocab_size columns
+        encoded = to_categorical(sequence, num_classes=vocab_size)
+        ylist.append(encoded)
+    y = np.array(ylist)
+    y = y.reshape(sequences.shape[0], sequences.shape[1], vocab_size)
+    return y
+
+''' Reverse mapping of tokenizer to get a word from a unique index '''
+def index_to_word(integer, tokenizer):
+    for w, i in tokenizer.word_index.items():
+        if i == integer:
+            return w
+    return None
 
 def remove_contractions(sentence):
     sentence = re.sub(r"won\'t", "will not", sentence)
@@ -189,8 +233,8 @@ def clean_line(line):
     
     line = remove_contractions(line)
     line = line.split()
-    # make lower case
-    line = [word.lower() for word in line]
+    # make lower case and remove any start or stop tokens (this should never be the case anyway)
+    line = [word.lower() for word in line if word != START_SEQ_TOKEN and word != END_SEQ_TOKEN]
     # remove punctuation
     line = [re_punc.sub('', w) for w in line]
     # remove non-printable chars
