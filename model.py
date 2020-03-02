@@ -19,6 +19,8 @@ from keras.layers import Embedding
 from keras.layers import RepeatVector
 from keras.layers import TimeDistributed
 from keras.layers import Input
+from keras.layers import Lambda
+from keras.optimizers import Adam
 from keras.callbacks import ModelCheckpoint
 
 
@@ -83,7 +85,7 @@ def seq2seq_model(vocab_size, src_timesteps, tar_timesteps, n_units, embedding_m
     # LSTM 4-layer encoder
     input_utterence = Input(shape=(None,))
     encoder_inputs = embedding(input_utterence)
-    encoder = LSTM(n_units, return_states=True, dropout=DROPOUT)
+    encoder = LSTM(n_units, return_state=True, dropout=DROPOUT)
     # get back the last hidden state and last cell state from the encoder LSTM
     encoder_output, hidden_state, cell_state = encoder(encoder_inputs)
     
@@ -91,17 +93,20 @@ def seq2seq_model(vocab_size, src_timesteps, tar_timesteps, n_units, embedding_m
     # LSTM 4-layer decoder using teacher forcing
     target_utterence = Input(shape=(None,))
     decoder_inputs = embedding(target_utterence)
+    # want to use the same embedding between encoder and decoder but slice so shapes match
+    decoder_inputs = Lambda(lambda x: x[:, :tar_timesteps, :], output_shape=(tar_timesteps, e_dim))(decoder_inputs)
+    
     # decoder will output hidden state of all it's timesteps along with
     # last hidden state and last cell state which is used for inference model
     decoder = LSTM(n_units, return_sequences=True, return_state=True, dropout=DROPOUT)
     decoder_outputs, _, _ = decoder(decoder_inputs, initial_state=[hidden_state, cell_state])
     # apply softmax over the whole vocab for every decoder output hidden state
-    outputs = TimeDistributed(Dense(vocab_size, activation="softmax"))(decoder_outputs)
+    outputs = Dense(vocab_size, activation="softmax")(decoder_outputs)
     
     # treat as a multi-class classification problem where need to predict
     # P(yi | x1, x2, ..., xn, y1, y2, ..., yi-1)
     model = Model([input_utterence, target_utterence], outputs)
-    model.compile(optimizer='adam', loss='categorical_crossentropy', clipnorm=CLIP_NORM)
+    model.compile(optimizer=Adam(clipnorm=CLIP_NORM), loss='categorical_crossentropy')
     model.summary()
     plot_model(model, to_file=pre.MODEL_IMAGE_FN, show_shapes=True)
     return model

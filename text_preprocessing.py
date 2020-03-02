@@ -13,7 +13,7 @@ TEST_FN             = "data/valid_self_original_no_cands.txt"
 TRAIN_PKL_FN        = "data/train_set.pkl"
 TEST_PKL_FN         = "data/test_set.pkl"
 TOKENIZER_PKL_FN    = "data/tokenizer.pkl"
-GLOVE_FN            = "data/glove.42B.300d.txt"
+GLOVE_FN            = "data/glove.6B.300d.txt"
 MODEL_IMAGE_FN      = "saved_models/model.png"
 MODEL_FN            = "saved_models/model.h5"
 
