@@ -19,29 +19,6 @@ LSTM_DIM = 512
 EPOCHS = 10
 BATCH_SIZE = 64
 CLIP_NORM = 5
-DROPOUT = 0.2
-
-def generate_reply_seq2seq(input_seq, max_out_seq_length, tokenizer, encoder_model, decoder_model):
-    # get the hidden and cell state from the encoder
-    hidden_state, cell_state = encoder_model.predict(input_seq)
-    
-    reply = []
-    prev_word = pre.START_SEQ_TOKEN
-    while True:
-        out_softmax_layer, hidden_state, cell_state = decoder_model.predict(
-            [pre.encode_sequences(tokenizer, 1, prev_word)[0], hidden_state, cell_state])
-        
-        # get predicted word by looking at highest node in output softmax layer
-        word_index = np.argmax(out_softmax_layer[0, -1, :])
-        prev_word = pre.index_to_word(word_index, tokenizer)
-        
-        if prev_word == pre.END_SEQ_TOKEN or len(reply) >= max_out_seq_length:
-            break
-        
-        reply.append(prev_word)
-    
-    return " ".join(reply)
-
 
 def train_seq2seq():
     # load training and validation set
@@ -84,32 +61,49 @@ def train_seq2seq():
     # load GloVe embeddings
     embedding_matrix = pre.load_glove_embedding(tokenizer)
     
-    # encoder and decoder share the same embedding
-    e_dim = embedding_matrix.shape[1]
-    embedding = Embedding(vocab_size, e_dim, weights=[embedding_matrix], input_length=None , trainable=True, mask_zero=True)
-    
     
     # ------ Model Definition ------ #
     src_timesteps = in_seq_length
     tar_timesteps = out_seq_length
     n_units = LSTM_DIM
     
+    # encoder and decoder share the same embedding
+    e_dim = embedding_matrix.shape[1]
+    embedding = Embedding(vocab_size, e_dim, weights=[embedding_matrix], input_length=None , trainable=True, mask_zero=True)
+    
     # LSTM 4-layer encoder
     input_utterence = Input(shape=(src_timesteps,))
     encoder_inputs = embedding(input_utterence)
-    encoder = LSTM(n_units, return_state=True, dropout=DROPOUT)
-    # get back the last hidden state and last cell state from the encoder LSTM
-    encoder_output, hidden_state, cell_state = encoder(encoder_inputs)
+    
+    encoder1 = LSTM(n_units, return_sequences=True, return_state=True)
+    encoder_output, h1, c1 = encoder1(encoder_inputs)
+    
+    encoder2 = LSTM(n_units, return_sequences=True, return_state=True)
+    encoder_output, h2, c2 = encoder2(encoder_output)
+    
+    encoder3 = LSTM(n_units, return_sequences=True, return_state=True)
+    encoder_output, h3, c3 = encoder3(encoder_output)
+    
+    encoder4 = LSTM(n_units, return_state=True)
+    encoder_output, h4, c4 = encoder4(encoder_output)
     
     
     # LSTM 4-layer decoder using teacher forcing
     target_utterence = Input(shape=(tar_timesteps,))
     decoder_inputs = embedding(target_utterence)
     
-    # decoder will output hidden state of all it's timesteps along with
-    # last hidden state and last cell state which is used for inference model
-    decoder = LSTM(n_units, return_sequences=True, return_state=True, dropout=DROPOUT)
-    decoder_outputs, _, _ = decoder(decoder_inputs, initial_state=[hidden_state, cell_state])
+    decoder1 = LSTM(n_units, return_sequences=True, return_state=True)
+    decoder_outputs, _, _ = decoder1(decoder_inputs, initial_state=[h1, c1])
+    
+    decoder2 = LSTM(n_units, return_sequences=True, return_state=True)
+    decoder_outputs, _, _ = decoder2(decoder_outputs, initial_state=[h2, c2])
+    
+    decoder3 = LSTM(n_units, return_sequences=True, return_state=True)
+    decoder_outputs, _, _ = decoder3(decoder_outputs, initial_state=[h3, c3])
+    
+    decoder4 = LSTM(n_units, return_sequences=True, return_state=True)
+    decoder_outputs, _, _ = decoder4(decoder_inputs, initial_state=[h4, c4])
+    
     # apply softmax over the whole vocab for every decoder output hidden state
     dense = Dense(vocab_size, activation="softmax")
     outputs = dense(decoder_outputs)
@@ -134,22 +128,45 @@ def train_seq2seq():
     batch_size = 1
     inf_encoder_utterence = Input(batch_shape=(batch_size, src_timesteps))
     inf_encoder_input = embedding(inf_encoder_utterence)
-    inf_encoder_out, inf_encoder_hidden_state, inf_encoder_cell_state = encoder(inf_encoder_input)
+    inf_encoder_out, inf_h1, inf_c1 = encoder1(inf_encoder_input)
+    inf_encoder_out, inf_h2, inf_c2 = encoder2(inf_encoder_out)
+    inf_encoder_out, inf_h3, inf_c3 = encoder3(inf_encoder_out)
+    inf_encoder_out, inf_h4, inf_c4 = encoder4(inf_encoder_out)
     encoder_model = Model(inputs=inf_encoder_utterence, 
-                          outputs=[inf_encoder_hidden_state, inf_encoder_cell_state])
+                          outputs=[inf_h1, inf_c1, inf_h2, inf_c2, inf_h3, inf_c3, inf_h4, inf_c4])
     
     
     inf_decoder_utterence = Input(batch_shape=(batch_size, 1))
-    inf_decoder_input_h   = Input(batch_shape=(batch_size, n_units))
-    inf_decoder_input_c   = Input(batch_shape=(batch_size, n_units))
+    inf_decoder_input_h1  = Input(batch_shape=(batch_size, n_units))
+    inf_decoder_input_c1  = Input(batch_shape=(batch_size, n_units))
+    
+    inf_decoder_input_h2  = Input(batch_shape=(batch_size, n_units))
+    inf_decoder_input_c2  = Input(batch_shape=(batch_size, n_units))
+    
+    inf_decoder_input_h3  = Input(batch_shape=(batch_size, n_units))
+    inf_decoder_input_c3  = Input(batch_shape=(batch_size, n_units))
+    
+    inf_decoder_input_h4  = Input(batch_shape=(batch_size, n_units))
+    inf_decoder_input_c4  = Input(batch_shape=(batch_size, n_units))
     inf_decoder_input     = embedding(inf_decoder_utterence)
     
-    inf_decoder_out, inf_decoder_state_h, inf_decoder_state_c = decoder(
-        inf_decoder_input, initial_state=[inf_decoder_input_h, inf_decoder_input_c])
+    inf_decoder_out, inf_decoder_h1, inf_decoder_c1 = decoder1(
+        inf_decoder_input, initial_state=[inf_decoder_input_h1, inf_decoder_input_c1])
+    
+    inf_decoder_out, inf_decoder_h2, inf_decoder_c2 = decoder2(
+        inf_decoder_out, initial_state=[inf_decoder_input_h2, inf_decoder_input_c2])
+    
+    inf_decoder_out, inf_decoder_h3, inf_decoder_c3 = decoder3(
+        inf_decoder_out, initial_state=[inf_decoder_input_h3, inf_decoder_input_c3])
+    
+    inf_decoder_out, inf_decoder_h4, inf_decoder_c4 = decoder4(
+        inf_decoder_out, initial_state=[inf_decoder_input_h4, inf_decoder_input_c4])
+    
     inf_output = dense(inf_decoder_out)
+    
     decoder_model = Model(
-        inputs=[inf_decoder_utterence, inf_decoder_input_h, inf_decoder_input_c],
-        outputs=[inf_output, inf_decoder_state_h, inf_decoder_state_c])    
+        inputs=[inf_decoder_utterence, inf_decoder_input_h1, inf_decoder_input_c1, inf_decoder_input_h2, inf_decoder_input_c2, inf_decoder_input_h3, inf_decoder_input_c3, inf_decoder_input_h4, inf_decoder_input_c4],
+        outputs=[inf_output, inf_decoder_h1, inf_decoder_c1, inf_decoder_h2, inf_decoder_c2, inf_decoder_h3, inf_decoder_c3, inf_decoder_h4, inf_decoder_c4])    
     # ------ ------ #
     
     # save the tokenizer and model so it can be used for prediction
@@ -166,3 +183,24 @@ def train_seq2seq():
         reply = generate_reply_seq2seq(input_seq, out_seq_length, tokenizer, encoder_model, decoder_model)
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
+        
+def generate_reply_seq2seq(input_seq, max_out_seq_length, tokenizer, encoder_model, decoder_model):
+    # get the hidden and cell state from the encoder
+    h1, c1, h2, c2, h3, c3, h4, c4 = encoder_model.predict(input_seq)
+    
+    reply = []
+    prev_word = pre.START_SEQ_TOKEN
+    while True:
+        out_softmax_layer, h1, c1, h2, c2, h3, c3, h4, c4 = decoder_model.predict(
+            [pre.encode_sequences(tokenizer, 1, prev_word)[0], h1, c1, h2, c2, h3, c3, h4, c4])
+        
+        # get predicted word by looking at highest node in output softmax layer
+        word_index = np.argmax(out_softmax_layer[0, -1, :])
+        prev_word = pre.index_to_word(word_index, tokenizer)
+        
+        if prev_word == pre.END_SEQ_TOKEN or len(reply) >= max_out_seq_length:
+            break
+        
+        reply.append(prev_word)
+    
+    return " ".join(reply)
