@@ -7,7 +7,7 @@ import numpy as np
 import text_preprocessing as pre
 import seq2seq_model as seq2seq
 from nltk.translate.bleu_score import corpus_bleu
-from keras.models import load_model
+from tensorflow.keras.models import load_model
 
 
 
@@ -38,27 +38,7 @@ def evaluate_by_auto_metrics(model, sources, dataset_not_encoded, tokenizer, ver
         
 
 def evaluate():
-    # load dataset
-    dataset = pre.load_object(pre.CLEANED_PAIRS_PKL_FN)
-    train = pre.load_object(pre.TRAIN_SET_FN)
-    test = pre.load_object(pre.TEST_SET_FN)
-    
-    # english tokenizer
-    eng_tokenizer = pre.fit_tokenizer(dataset[:, 0])
-    eng_vocab_size = len(eng_tokenizer.word_index) + 1
-    eng_length = pre.max_seq_length(dataset[:, 0])
-    
-    # german tokenizer
-    ger_tokenizer = pre.fit_tokenizer(dataset[:, 1])
-    ger_vocab_size = len(ger_tokenizer.word_index) + 1
-    ger_length = pre.max_seq_length(dataset[:, 1])
-    
-    trainX = pre.encode_sequences(ger_tokenizer, ger_length, train[:, 1])
-    testX = pre.encode_sequences(ger_tokenizer, ger_length, test[:, 1])
-    model = load_model(pre.MODEL_FN)
-    
-    evaluate_by_auto_metrics(model, trainX, dataset, eng_tokenizer)
-    evaluate_by_auto_metrics(model, testX, dataset, eng_tokenizer)
+    pass
     
     
 if __name__ == '__main__':

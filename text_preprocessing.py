@@ -15,14 +15,22 @@ TRAIN_FN            = "data/train_self_original_no_cands.txt"
 TEST_FN             = "data/valid_self_original_no_cands.txt"
 TRAIN_PKL_FN        = "data/train_set.pkl"
 TEST_PKL_FN         = "data/test_set.pkl"
-TOKENIZER_PKL_FN    = "data/tokenizer.pkl"
-MAX_OUT_LEN_PKL_FN  = "data/max_out_len.pkl"
-MAX_IN_LEN_PKL_FN   = "data/max_in_len.pkl"
 GLOVE_FN            = "data/glove.6B.300d.txt"
-MODEL_IMAGE_FN      = "saved_models/model.png"
-MODEL_FN            = "saved_models/model.h5"
-ENCODER_MODEL_FN    = "saved_models/encoder_model.h5"
-DECODER_MODEL_FN    = "saved_models/decoder_model.h5"
+
+SEQ2SEQ_MODEL_IMAGE_FN      = "saved_models/seq2seq_model.png"
+SEQ2SEQ_MODEL_FN            = "saved_models/seq2seq_model.h5"
+SEQ2SEQ_ENCODER_MODEL_FN    = "saved_models/seq2seq_encoder_model.h5"
+SEQ2SEQ_DECODER_MODEL_FN    = "saved_models/seq2seq_decoder_model.h5"
+SEQ2SEQ_TOKENIZER_PKL_FN    = "data/seq2seq_tokenizer.pkl"
+SEQ2SEQ_MAX_OUT_LEN_PKL_FN  = "data/seq2seq_max_out_len.pkl"
+SEQ2SEQ_MAX_IN_LEN_PKL_FN   = "data/seq2seq_max_in_len.pkl"
+
+AUTOENC_MODEL_IMAGE_FN      = "saved_models/autoenc_model.png"
+AUTOENC_MODEL_FN            = "saved_models/autoenc_model.h5"
+AUTOENC_TOKENIZER_PKL_FN    = "data/autoenc_tokenizer.pkl"
+AUTOENC_MAX_OUT_LEN_PKL_FN  = "data/autoenc_max_out_len.pkl"
+AUTOENC_MAX_IN_LEN_PKL_FN   = "data/autoenc_max_in_len.pkl"
+
 
 # punctuation which will not be removed from training/test data
 ALLOWED_CHARS = ['.', ',', '_', '?']
