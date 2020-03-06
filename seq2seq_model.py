@@ -7,12 +7,12 @@ import text_preprocessing as pre
 import tensorflow as tf
 from attention import AttentionLayer
 from keras.utils.vis_utils import plot_model
-from tensorflow.keras.layers import LSTM, Dense, Embedding, TimeDistributed, Input, Bidirectional, Concatenate
+from tensorflow.keras.layers import LSTM, Dense, Embedding, TimeDistributed, Input, Bidirectional, Concatenate, Dropout
 from tensorflow.keras.models import load_model, Model
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import ModelCheckpoint
 
-def train_seq2seq(LSTM_DIM=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5):
+def train_seq2seq(LSTM_DIM=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, DROPOUT=0.2):
     train, train_personas = pre.load_object(pre.TRAIN_PKL_FN)
     # fit tokenizer over training data and start, stop tokens
     tokenizer = pre.fit_tokenizer( np.concatenate([train_personas, train[:, 0], train[:, 1], np.array([pre.START_SEQ_TOKEN, pre.END_SEQ_TOKEN])]) )
@@ -131,6 +131,7 @@ def train_seq2seq(LSTM_DIM=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5):
     # apply softmax over the whole vocab for every decoder output hidden state
     dense1 = Dense(n_units * 3, activation="relu")
     outputs = dense1(decoder_concat_outputs)
+    outputs = Dropout(DROPOUT)(outputs)
     dense2 = Dense(vocab_size, activation="softmax")
     outputs = dense2(outputs)
     
