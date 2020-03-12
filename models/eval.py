@@ -121,12 +121,12 @@ if __name__ == '__main__':
         elif args.talk == model_choices[3]:
             pass
         
+        persona, _ = pre.load_dataset(pre.TRAIN_FN)
+        persona = persona[0]
+        print("Talking with %s model, enter <exit> to close this program\n" % args.talk)
+        print("Persona: %s" % persona)#
+        
         while True:
-            persona, _ = pre.load_dataset(pre.TRAIN_FN)
-            persona = persona[0]
-            
-            print("Talking with %s model, enter <exit> to close this program\n" % args.talk)
-            print("Persona: %s" % persona)
             msg = input("Enter your message: ")
             
             if msg == "<exit>":

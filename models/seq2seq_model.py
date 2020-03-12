@@ -311,7 +311,7 @@ def train_seq2seq(LSTM_DIM=512, EPOCHS=100, BATCH_SIZE=128, CLIP_NORM=5, DROPOUT
         
 ''' Generates a reply for a trained sequence to sequence model '''
 def generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_seq_length, out_seq_length):
-    input_seq = pre.encode_sequences(tokenizer, in_seq_length, input_msg)
+    input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
     
     # get the hidden and cell state from the encoder
     encoder_outputs, h1, c1, h2, c2, h3, c3, h4, c4 = encoder_model.predict(input_seq)

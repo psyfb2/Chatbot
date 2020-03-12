@@ -28,7 +28,7 @@ def autoencoder_model(vocab_size, src_timesteps, tar_timesteps, n_units, embeddi
 
 def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, train_by_batch=True):
     vocab, persona_length, msg_length, reply_length = pre.get_vocab()
-    tokenizer = pre.fit_tokenizer(vocab, oov_token=False)
+    tokenizer = pre.fit_tokenizer(vocab)
     # + 1 for padding 0 value not in word_index dictionary
     vocab_size = len(tokenizer.word_index) + 1
     vocab = None
@@ -83,7 +83,7 @@ def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, trai
     
 ''' Given source sentence, generate the model inference as a target sentence '''
 def generate_reply_autoencoder(model, tokenizer, input_msg, in_seq_length):
-    input_seq = pre.encode_sequences(tokenizer, in_seq_length, input_msg)
+    input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
     
     prediction = model.predict(input_seq, verbose=0)
     prediction = prediction[0]
