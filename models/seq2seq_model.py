@@ -6,60 +6,47 @@ import numpy as np
 import text_preprocessing as pre
 import tensorflow as tf
 from attention import AttentionLayer
-from keras.utils.vis_utils import plot_model
+from tensorflow.keras.utils import plot_model
 from tensorflow.keras.layers import LSTM, Dense, Embedding, TimeDistributed, Input, Bidirectional, Concatenate, Dropout
 from tensorflow.keras.models import load_model, Model
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import ModelCheckpoint
 
-def train_seq2seq(LSTM_DIM=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, DROPOUT=0.2):
-    train, train_personas = pre.load_object(pre.TRAIN_PKL_FN)
-    # fit tokenizer over training data and start, stop tokens
-    tokenizer = pre.fit_tokenizer( np.concatenate([train_personas, train[:, 0], train[:, 1], np.array([pre.START_SEQ_TOKEN, pre.END_SEQ_TOKEN])]) )
+def pre_train_seq2seq_movie(LSTM_DIM, EPOCHS, BATCH_SIZE, CLIP_NORM, DROPOUT, train_by_batch):
+    vocab, persona_length, msg_length, reply_length = pre.get_vocab()
+    tokenizer = pre.fit_tokenizer(vocab)
     vocab_size = len(tokenizer.word_index) + 1
+    vocab = None
     
-    # train is a numpy array containing triples [message, reply, persona_index]
-    # personas is an numpy array of strings for the personas
-    
-    # need 3 arrays to fit the seq2seq model as will be using teacher forcing
-    # encoder_input which is persona prepended to message, integer encoded and padded
-    # for all messages so will have shape (utterances, in_seq_length)
-    
-    # decoder_input which is the reponse to the input, integer_encoded and padded
-    # for all messages so will have shape (utterances, out_seq_length)
-    
-    # decoder_target which is the response to the input with an end of sequence token
-    # appended, one_hot encoded and padded. shape (utterances, out_seq_length, vocab_size)
-    encoder_input  = np.array([train_personas[int(row[2])] + ' ' + row[0] for row in train])
-    decoder_input  = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] for row in train])
-    decoder_target = np.array([row[1] + ' ' + pre.END_SEQ_TOKEN for row in train])
-    
-    raw = encoder_input
-    
-    in_seq_length = pre.max_seq_length(encoder_input)
-    out_seq_length = pre.max_seq_length(decoder_input)
+    in_seq_length = persona_length + 1 + msg_length
+    out_seq_length = reply_length + 1
     
     print('Vocab size: %d' % vocab_size)
     print('Input sequence length: %d' % in_seq_length)
     print('Output sequence length: %d' % out_seq_length)
-
-    # prepare training data
+    
+    movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
+    
+    encoder_input  = movie_conversations[:, 0]
+    decoder_input  = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] for row in movie_conversations])
+    decoder_target = np.array([row[1] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
+    
+    raw = encoder_input[:20]
+    
+    # integer encode training data
     encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
     decoder_input  = pre.encode_sequences(tokenizer, out_seq_length, decoder_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
-    decoder_target = pre.encode_output(decoder_target, vocab_size)
     
-
     # load GloVe embeddings
     embedding_matrix = pre.load_glove_embedding(tokenizer)
     
-    
-    # ------ Model Definition ------ #
+    # ------ seq2seq model definition and training ------ #
+    n_units = LSTM_DIM
+    dropout = DROPOUT
     src_timesteps = in_seq_length
     tar_timesteps = out_seq_length
-    n_units = LSTM_DIM
     
-    # encoder and decoder share the same embedding
     e_dim = embedding_matrix.shape[1]
     embedding = Embedding(vocab_size, e_dim, weights=[embedding_matrix], input_length=None , trainable=True, mask_zero=True)
     
@@ -131,7 +118,7 @@ def train_seq2seq(LSTM_DIM=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, DROPOUT=0
     # apply softmax over the whole vocab for every decoder output hidden state
     dense1 = Dense(n_units * 3, activation="relu")
     outputs = dense1(decoder_concat_outputs)
-    outputs = Dropout(DROPOUT)(outputs)
+    outputs = Dropout(dropout)(outputs)
     dense2 = Dense(vocab_size, activation="softmax")
     outputs = dense2(outputs)
     
@@ -140,9 +127,15 @@ def train_seq2seq(LSTM_DIM=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, DROPOUT=0
     model = Model([input_utterence, target_utterence], outputs)
     model.compile(optimizer=Adam(clipnorm=CLIP_NORM), loss='categorical_crossentropy')
     model.summary()
-    model.fit([encoder_input, decoder_input], decoder_target,
-              epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)     
     plot_model(model, to_file=pre.SEQ2SEQ_MODEL_IMAGE_FN, show_shapes=True)
+    
+    if train_by_batch:
+        train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS)
+    else:
+        decoder_target = pre.encode_output(decoder_target, vocab_size)
+        model.fit([encoder_input, decoder_input], decoder_target,
+                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)  
+    
 
     # cannot use trained model directly for inference because of teacher forcing
     # don't have the ground truth for the target sequence during inference
@@ -207,21 +200,79 @@ def train_seq2seq(LSTM_DIM=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, DROPOUT=0
                  inf_decoder_h4, inf_decoder_c4])
     # ------ ------ #
     
-    # save the tokenizer and model so it can be used for prediction
-    pre.save_object(tokenizer, pre.SEQ2SEQ_TOKENIZER_PKL_FN)
-    pre.save_object(out_seq_length, pre.SEQ2SEQ_MAX_OUT_LEN_PKL_FN)
-    pre.save_object(in_seq_length, pre.SEQ2SEQ_MAX_IN_LEN_PKL_FN)
+    print("Finished Pre-training on movie conversations for %d epochs" % EPOCHS)
+    
+    # save the models
     model.save(pre.SEQ2SEQ_MODEL_FN)
     encoder_model.save(pre.SEQ2SEQ_ENCODER_MODEL_FN)
     decoder_model.save(pre.SEQ2SEQ_DECODER_MODEL_FN) 
     
     # do some dummy text generation
-    for i in range(20):
+    for i in range(len(raw)):
+        input_seq = encoder_input[i:i+1]
+        reply, _ = generate_reply_seq2seq(input_seq, out_seq_length, tokenizer, encoder_model, decoder_model)
+        print("Message:", raw[i])
+        print("Reply:", reply + "\n")
+    
+    return model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length
+    
+    
+''' Train sequence to sequence model with attention ans save the model to file '''
+def train_seq2seq(LSTM_DIM=512, EPOCHS=100, BATCH_SIZE=128, CLIP_NORM=5, DROPOUT=0.2, train_by_batch=True):
+    # pretrain the model on movie conversations to get a sense of the english language
+    model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length = pre_train_seq2seq_movie(
+        LSTM_DIM, 0, BATCH_SIZE, CLIP_NORM, DROPOUT, train_by_batch)
+    vocab_size = len(tokenizer.word_index) + 1
+    
+    # pretrain the model on daily dialogue to get a sense for question and answering
+    
+    
+    train_personas, train = pre.load_dataset(pre.TRAIN_FN)
+    
+    # train is a numpy array containing triples [message, reply, persona_index]
+    # personas is an numpy array of strings for the personas
+    
+    # need 3 arrays to fit the seq2seq model as will be using teacher forcing
+    # encoder_input which is persona prepended to message, integer encoded and padded
+    # for all messages so will have shape (utterances, in_seq_length)
+    
+    # decoder_input which is the reponse to the input, integer_encoded and padded
+    # for all messages so will have shape (utterances, out_seq_length)
+    
+    # decoder_target which is the response to the input with an end of sequence token
+    # appended, one_hot encoded and padded. shape (utterances, out_seq_length, vocab_size)
+    encoder_input  = np.array([train_personas[int(row[2])] + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in train])
+    decoder_input  = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] for row in train])
+    decoder_target = np.array([row[1] + ' ' + pre.END_SEQ_TOKEN for row in train])
+    
+    raw = encoder_input[:20]
+    
+    # integer encode training data
+    encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
+    decoder_input  = pre.encode_sequences(tokenizer, out_seq_length, decoder_input)
+    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
+    
+    
+    if train_by_batch:
+        train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS)
+    else:
+        decoder_target = pre.encode_output(decoder_target, vocab_size)
+        model.fit([encoder_input, decoder_input], decoder_target,
+                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)     
+    
+    # save the models
+    model.save(pre.SEQ2SEQ_MODEL_FN)
+    encoder_model.save(pre.SEQ2SEQ_ENCODER_MODEL_FN)
+    decoder_model.save(pre.SEQ2SEQ_DECODER_MODEL_FN) 
+    
+    # do some dummy text generation
+    for i in range(len(raw)):
         input_seq = encoder_input[i:i+1]
         reply, _ = generate_reply_seq2seq(input_seq, out_seq_length, tokenizer, encoder_model, decoder_model)
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
         
+''' Generates a reply for a trained sequence to sequence model '''
 def generate_reply_seq2seq(input_seq, max_out_seq_length, tokenizer, encoder_model, decoder_model):
     # get the hidden and cell state from the encoder
     encoder_outputs, h1, c1, h2, c2, h3, c3, h4, c4 = encoder_model.predict(input_seq)
@@ -239,7 +290,7 @@ def generate_reply_seq2seq(input_seq, max_out_seq_length, tokenizer, encoder_mod
         attn_weights.append((word_index, attn_weights))
         prev_word = pre.index_to_word(word_index, tokenizer)
         
-        if prev_word == pre.END_SEQ_TOKEN or len(reply) >= max_out_seq_length:
+        if prev_word == pre.END_SEQ_TOKEN or len(reply) >= max_out_seq_length or prev_word == None:
             break
         
         reply.append(prev_word)
@@ -247,11 +298,11 @@ def generate_reply_seq2seq(input_seq, max_out_seq_length, tokenizer, encoder_mod
     return " ".join(reply), attn_weights
 
 ''' Trains the model batch by batch for the purposes of reducing memory usage 
-    give non one-hot encoded decoder target, will one hot encode this per-batch '''
-def train_on_batch(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS, verbose=1):
+    give integer encoded decoder target, will one hot encode this per-batch '''
+def train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS, verbose=1):
     for epoch in range(EPOCHS):
         losses = []
-        for i in range(0, encoder_input.shape[0] - BATCH_SIZE, BATCH_SIZE):
+        for i in range(0, encoder_input.shape[0] - BATCH_SIZE + 1, BATCH_SIZE):
             batch_encoder_input = encoder_input[i:i+BATCH_SIZE]
             batch_decoder_input = decoder_input[i:i+BATCH_SIZE]
             batch_decoder_target = pre.encode_output(
@@ -266,7 +317,7 @@ def train_on_batch(model, encoder_input, decoder_input, decoder_target, vocab_si
             losses.append(l)
             
             if verbose == 1:
-                print("BATCH %d / %d - loss: %f" % (i, int((encoder_input.shape[0] - BATCH_SIZE) / BATCH_SIZE), l))
+                print("BATCH %d / %d - loss: %f" % (i + BATCH_SIZE, encoder_input.shape[0], l))
             
         print("Mean loss in epoch %d : %f : " % (epoch + 1, np.mean(losses)))
-            
+        

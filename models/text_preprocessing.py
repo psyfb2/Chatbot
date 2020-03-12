@@ -7,35 +7,31 @@ import numpy as np
 import string
 import pickle
 import re
+import os
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
 
-TRAIN_FN            = "data/train_self_original_no_cands.txt"
-TEST_FN             = "data/valid_self_original_no_cands.txt"
-TRAIN_PKL_FN        = "data/train_set.pkl"
-TEST_PKL_FN         = "data/test_set.pkl"
-GLOVE_FN            = "data/glove.6B.300d.txt"
+TRAIN_FN            = "../data/train_self_original_no_cands.txt"
+TEST_FN             = "../data/valid_self_original_no_cands.txt"
+MOVIE_FN            = "../data/movie_lines.txt"
+VOCAB_FN            = "../data/vocab.txt"
+GLOVE_FN            = "../data/glove.6B.300d.txt"
 
-SEQ2SEQ_MODEL_IMAGE_FN      = "saved_models/seq2seq_model.png"
-SEQ2SEQ_MODEL_FN            = "saved_models/seq2seq_model.h5"
-SEQ2SEQ_ENCODER_MODEL_FN    = "saved_models/seq2seq_encoder_model.h5"
-SEQ2SEQ_DECODER_MODEL_FN    = "saved_models/seq2seq_decoder_model.h5"
-SEQ2SEQ_TOKENIZER_PKL_FN    = "data/seq2seq_tokenizer.pkl"
-SEQ2SEQ_MAX_OUT_LEN_PKL_FN  = "data/seq2seq_max_out_len.pkl"
-SEQ2SEQ_MAX_IN_LEN_PKL_FN   = "data/seq2seq_max_in_len.pkl"
+SEQ2SEQ_MODEL_IMAGE_FN      = "../saved_models/seq2seq_model.png"
+SEQ2SEQ_MODEL_FN            = "../saved_models/seq2seq_model.h5"
+SEQ2SEQ_ENCODER_MODEL_FN    = "../saved_models/seq2seq_encoder_model.h5"
+SEQ2SEQ_DECODER_MODEL_FN    = "../saved_models/seq2seq_decoder_model.h5"
 
-AUTOENC_MODEL_IMAGE_FN      = "saved_models/autoenc_model.png"
-AUTOENC_MODEL_FN            = "saved_models/autoenc_model.h5"
-AUTOENC_TOKENIZER_PKL_FN    = "data/autoenc_tokenizer.pkl"
-AUTOENC_MAX_OUT_LEN_PKL_FN  = "data/autoenc_max_out_len.pkl"
-AUTOENC_MAX_IN_LEN_PKL_FN   = "data/autoenc_max_in_len.pkl"
+AUTOENC_MODEL_IMAGE_FN      = "../saved_models/autoenc_model.png"
+AUTOENC_MODEL_FN            = "../saved_models/autoenc_model.h5"
 
 
 # punctuation which will not be removed from training/test data
 ALLOWED_CHARS = ['.', ',', '_', '?']
 START_SEQ_TOKEN = "startseqq"
 END_SEQ_TOKEN   = "stopseqq"
+SEP_SEQ_TOKEN   = "sepseqq"
 
 def remove_allowed_chars(punc_str):
     for char in ALLOWED_CHARS:
@@ -63,7 +59,6 @@ This is the no_cands version, which means candidate replies which are not
 the ground truth are included within possible replies of the bot within the dataset. 
 This is useful when training for multi-task problem to produce utterance sequence 
 but also classify which reply from the candidates is the ground truth.
-https://github.com/huggingface/transfer-learning-conv-ai/blob/master/example_entry.py
 
 '''
 
@@ -88,7 +83,7 @@ def load_glove_embedding(tokenizer, glove_filename=GLOVE_FN):
         dimensions = 200
     else:
         dimensions = 300
-        
+    
     embedding_matrix = np.zeros((vocab_size, dimensions))
     for word, unique_index in tokenizer.word_index.items():
         # get the embedding vector from the dictionary created above
@@ -100,8 +95,11 @@ def load_glove_embedding(tokenizer, glove_filename=GLOVE_FN):
 
 
 ''' Returns a keras tokenizer fitted on the given text '''
-def fit_tokenizer(lines):
-    tokenizer = Tokenizer(filters=remove_allowed_chars('!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n'))
+def fit_tokenizer(lines, oov_token=True):
+    if not oov_token:
+         tokenizer = Tokenizer(filters=remove_allowed_chars('!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n'))
+    else:
+        tokenizer = Tokenizer(filters=remove_allowed_chars('!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n'), oov_token="UNK")
     tokenizer.fit_on_texts(lines)
     return tokenizer
 
@@ -177,11 +175,11 @@ def get_persona_index(personas, single_pers):
                     return p_index
     raise ValueError("Could not find persona {}".format(single_pers))
                     
-''' Returns 
+''' Returns cleaned
     persona array [["persona_line_1, ... persona_line_4"], ...]
     array of message, reply, persona index triplets e.g. [["hi how are you", "hi good", 5], ...]
 '''
-def load_dataset(filename):
+def load_dataset(filename, verbose=0):
     personas = [] 
     conversations = []
     
@@ -202,7 +200,122 @@ def load_dataset(filename):
                 # which is ascociated with the last read persona
                 pair = line.split('\t')
                 conversations.append([pair[0], pair[1], p_index])
-    return personas, conversations
+                
+    # clean the conversation and personas
+    triples = clean_triples(conversations)
+    for i in range(len(personas)):
+        for j in range(len(personas[i])):
+            personas[i][j] = clean_line(remove_first_num(personas[i][j]))
+        personas[i] = ' '.join(personas[i])
+    personas = np.array(personas)
+    
+    # check that cleaned text is as intended
+    if verbose != 0:
+        for i in range(100):
+            assert len(triples[i]) == 3
+            print('[%s]\n[%s] => [%s]' % (personas[int(triples[i, 2])], triples[i, 0], triples[i, 1]))
+            print("\n")
+    
+    return personas, triples
+
+''' Returns
+    array of message, reply pairs e.g. [["give me the gun", "no i can't do that"], ...]
+'''
+def load_movie_dataset(filename=MOVIE_FN, verbose=0):
+    conversations = []
+    msg_reply = []
+    
+    with open(filename, 'r', encoding='latin-1') as lines:
+        for line in lines:
+            line = line.strip()
+            line = line.split(' +++$+++ ')[-1]         
+            
+            # remove some specific tags in the dataset
+            tags = ['<u>', '</u>', '<i>', '</i>', '<b>', '</b>']
+            line = " ".join([w for w in line.split(" ") if w.lower() not in tags])
+
+            line = clean_line(line)
+            
+            if len(msg_reply) >= 2:
+                conversations.append(msg_reply)
+                msg_reply = [msg_reply[1]]
+            
+            msg_reply.append(line)
+    
+    if verbose != 0:
+        for i in range(100):
+            assert len(conversations[i]) == 2
+            print('[%s] => [%s]' % (conversations[i][0], conversations[i][1]))
+            print("\n")
+            
+    return np.array(conversations)   
+
+''' Build a vocab file from the PERSONA-CHAT dataset for tokenizer '''
+def build_vocab_file(verbose=0):
+    personas, triples = load_dataset(TRAIN_FN)
+    personas2, triples2 = load_dataset(TEST_FN)
+    tokenizer = fit_tokenizer(
+        np.concatenate([personas, personas2, triples[:, 0], triples[:, 1], triples2[:, 0], triples2[:, 1]]), oov_token=False)
+    
+    max_persona_len = max_seq_length(np.concatenate([personas, personas2]))
+    max_msg_len     = max_seq_length(np.concatenate([triples[:, 0], triples2[:, 0]]))
+    max_reply_len   = max_seq_length(np.concatenate([triples[:, 1], triples2[:, 1]]))
+    
+    # write the vocab and max lengths to a file
+    with open(VOCAB_FN, 'wt') as f:
+        for w in tokenizer.word_index.keys():
+            f.write(w + "\n")
+        f.write(START_SEQ_TOKEN + "\n")
+        f.write(SEP_SEQ_TOKEN + "\n")
+        f.write(END_SEQ_TOKEN + "\n")
+        f.write("max persona length: %d\n" % max_persona_len)
+        f.write("max message length: %d\n" % max_msg_len)
+        f.write("max reply length: %d" % max_reply_len)
+    
+    if verbose != 0:
+        print("Max persona length: %d" % max_persona_len)
+        print("Max message length: %d" % max_msg_len)
+        print("Max reply length: %d" % max_reply_len)
+
+''' Returns numpy array of words in vocab,
+    persona_length, max message length 
+    and max reply length excluding any stop/start tokens
+    if the vocab hasn't been built yet, will automatically build it
+'''
+def get_vocab(rebuild_vocab=False, verbose=0):
+    vocab = []
+    persona_length = 0
+    message_length = 0
+    reply_length = 0
+    
+    # if the vocab file already doesnt exists then build the file
+    if not os.path.exists(VOCAB_FN) or rebuild_vocab:
+        build_vocab_file(verbose)
+    
+    with open(VOCAB_FN, 'rt') as lines:
+        for line in lines:
+            line = line.strip()
+            
+            if "persona length:" in line:
+                persona_length = int(line.split(" ")[-1])
+                
+            elif "message length:" in line:
+                message_length = int(line.split(" ")[-1])
+                
+            elif "reply length:" in line:
+                reply_length = int(line.split(" ")[-1])
+                
+            else:
+                vocab.append(line)
+     
+    if verbose != 0:
+        print("Max persona length: %d" % persona_length)
+        print("Max message length: %d" % message_length)
+        print("Max reply length: %d" % reply_length)
+        print(vocab[:50])
+            
+    return np.array(vocab), persona_length, message_length, reply_length
+            
     
 ''' Takes [["message text", "reply text", pindex], ...] 
     and returns the cleaned version in numpy array '''
@@ -242,13 +355,24 @@ def clean_line(line):
     line = remove_contractions(line)
     line = line.split()
     # make lower case and remove any start or stop tokens (this should never be the case anyway)
-    line = [word.lower() for word in line if word != START_SEQ_TOKEN and word != END_SEQ_TOKEN]
+    line = [word.lower() for word in line 
+            if word not in [START_SEQ_TOKEN, SEP_SEQ_TOKEN, END_SEQ_TOKEN]]
     # remove punctuation
     line = [re_punc.sub('', w) for w in line]
     # remove non-printable chars
     line = [re_print.sub('', w) for w in line]
     
-    return ' '.join(line)
+    line = ' '.join(line)
+    
+    # allowed punctuation needs to be spaced, e.g. hi, how are you. => hi , how are you .
+    # dont apply this to '_' because of __silence__ token
+    chars_to_space = ALLOWED_CHARS.copy()
+    chars_to_space.remove('_')
+    line = re.sub('([%s])' % "".join(chars_to_space), r' \1 ', line)
+    # remove multiple consecutive  spaces
+    line = re.sub('\s{2,}', ' ', line)
+    
+    return line.strip()
     
 ''' Remove the first number from a string '''
 def remove_first_num(strr):
@@ -278,39 +402,11 @@ def load_object(filename):
 ''' Given a list of cleaned lines ["sentence 1", "sentence 2", ...] 
     returns sentence with max num of words '''
 def max_seq_length(lines):
-    return max([len(line.split()) for line in lines])
-
-''' Given a list of cleaned lines ["sentence 1", "sentence 2", ...] 
-    returns the sequence length so that 90% of sequence lengths are below this'''
-def seq_length(lines):
-    lengths = sorted([len(line.split()) for line in lines])
-    return lengths[9 * (len(lengths) // 10)]
-
-''' Given a list of cleaned lines ["sentence 1", "sentence 2", ...] 
-    returns the mean length of the sentences '''
-def mean_seq_length(lines):
-    lengths = [len(line.split()) for line in lines]
-    return sum(lengths) // len(lengths)
-
-''' Saves the dataset, if given test set will split into validation and test
-    as numpy array of ([["message", "reply", p_index], ...], personas) in pickle files'''
-def save_dataset(load_fn, save_fn):
-    personas, msg_reply = load_dataset(load_fn)
-    
-    # clean the personas and message, reply pairs
-    triples = clean_triples(msg_reply)
-    for i in range(len(personas)):
-        for j in range(len(personas[i])):
-            personas[i][j] = clean_line(remove_first_num(personas[i][j]))
-        personas[i] = ' '.join(personas[i])
-    personas = np.array(personas)
-    
-    save_object((triples, personas), save_fn)
-    
-    # check that cleaned text is as intended
-    for i in range(100):
-        print('[%s]\n[%s] => [%s]' % (personas[int(triples[i, 2])], triples[i, 0], triples[i, 1]))
-        print("\n")
+    return max([len(line.split()) for line in lines])        
 
 if __name__ == '__main__':
-    save_dataset(TRAIN_FN, TRAIN_PKL_FN)
+    # test dataset loading works correctly
+    personas, triples = load_dataset(TRAIN_FN, verbose=1)
+    conversations = load_movie_dataset(MOVIE_FN, verbose=1)
+    vocab, persona_length, message_length, reply_length = get_vocab(True, verbose=1)
+    

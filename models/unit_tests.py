@@ -5,6 +5,7 @@
 import unittest
 from text_preprocessing import remove_first_num
 from text_preprocessing import remove_contractions
+from text_preprocessing import clean_line
 
 class TestPreprocessing(unittest.TestCase):
     
@@ -25,5 +26,9 @@ class TestPreprocessing(unittest.TestCase):
         self.assertEqual(remove_contractions("1 your persona: i can't sing"), "1 your persona: i can not sing")
         self.assertEqual(remove_contractions("1 your persona: i haven't cried in 5 years"), "1 your persona: i have not cried in 5 years")
 
+    def test_clean_line(self):
+       self.assertEqual(clean_line("blah. blah? blah, blah . blah..."), "blah . blah ? blah , blah . blah . . .")
+       self.assertEqual(clean_line("__silence__ yes, it's . &    £AND  maybe."), "__silence__ yes , it is . and maybe .")
+       
 if __name__ == "__main__":
     unittest.main()
