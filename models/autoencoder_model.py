@@ -44,7 +44,7 @@ def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, trai
     
     raw = encoder_input[:20]
     
-    in_seq_length = persona_length + 1 + msg_length
+    in_seq_length = persona_length + msg_length
     out_seq_length = reply_length
     
     print('Vocab size: %d' % vocab_size)
@@ -75,15 +75,16 @@ def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, trai
     
     # do some dummy text generation
     for i in range(len(raw)):
-        input_seq = encoder_input[i:i+1]
-        reply = generate_reply_autoencoder(model, tokenizer, input_seq)
+        reply = generate_reply_autoencoder(model, tokenizer, raw[i], in_seq_length)
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
 
 
     
 ''' Given source sentence, generate the model inference as a target sentence '''
-def generate_reply_autoencoder(model, tokenizer, input_seq):
+def generate_reply_autoencoder(model, tokenizer, input_msg, in_seq_length):
+    input_seq = pre.encode_sequences(tokenizer, in_seq_length, input_msg)
+    
     prediction = model.predict(input_seq, verbose=0)
     prediction = prediction[0]
     integers = [np.argmax(vec) for vec in prediction]

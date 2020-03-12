@@ -15,6 +15,7 @@ from keras.utils import to_categorical
 TRAIN_FN            = "../data/train_self_original_no_cands.txt"
 TEST_FN             = "../data/valid_self_original_no_cands.txt"
 MOVIE_FN            = "../data/movie_lines.txt"
+DAILYDIALOGUE_FN    = "../data/dialogues_text.txt"
 VOCAB_FN            = "../data/vocab.txt"
 GLOVE_FN            = "../data/glove.6B.300d.txt"
 
@@ -250,16 +251,58 @@ def load_movie_dataset(filename=MOVIE_FN, verbose=0):
             
     return np.array(conversations)   
 
-''' Build a vocab file from the PERSONA-CHAT dataset for tokenizer '''
+''' Returns
+    array of message, reply pairs e.g. [['Can you take out the bins ?', 'Yes I can .'], ...]
+'''
+def load_dailydialogue_dataset(filename=DAILYDIALOGUE_FN, verbose=0):
+    conversations = []
+    
+    with open(filename, 'r', encoding='utf-8') as lines:
+        for line in lines:
+            # each line is a conversation split with __eou__ for each utterence
+            
+            # remove and fix spacing around ’
+            line = line.replace(" ’ ", "'")
+            
+            line = clean_line(line)
+            
+            utterences = line.split("__eou__")[:-1]
+            for i in range(len(utterences) - 1):
+                conversations.append([utterences[i].strip(), utterences[i + 1].strip()])
+    
+    if verbose != 0:
+        for i in range(100):
+            assert len(conversations[i]) == 2
+            print('[%s] => [%s]' % (conversations[i][0], conversations[i][1]))
+            print("\n")
+            
+    return np.array(conversations)
+            
+
+''' Build a vocab file from the PERSONA-CHAT + daily dialogue dataset for tokenizer '''
 def build_vocab_file(verbose=0):
     personas, triples = load_dataset(TRAIN_FN)
     personas2, triples2 = load_dataset(TEST_FN)
-    tokenizer = fit_tokenizer(
-        np.concatenate([personas, personas2, triples[:, 0], triples[:, 1], triples2[:, 0], triples2[:, 1]]), oov_token=False)
+    conversations = load_dailydialogue_dataset()
     
-    max_persona_len = max_seq_length(np.concatenate([personas, personas2]))
-    max_msg_len     = max_seq_length(np.concatenate([triples[:, 0], triples2[:, 0]]))
-    max_reply_len   = max_seq_length(np.concatenate([triples[:, 1], triples2[:, 1]]))
+    # texts from daily dailogue and PERSONA CHAT
+    texts =  np.concatenate([personas, personas2, 
+                        triples[:, 0], triples[:, 1], triples2[:, 0], 
+                        triples2[:, 1], np.array([s[0] for s in conversations])])
+    
+    
+    tokenizer = fit_tokenizer(texts, oov_token=False)
+    
+    # remove infrequent words
+    low_count_words = [w for w,c in tokenizer.word_counts.items() if c < 2]
+    for w in low_count_words:
+        del tokenizer.word_index[w]
+        del tokenizer.word_docs[w]
+        del tokenizer.word_counts[w]
+        
+    max_persona_len = max_seq_length(np.concatenate([personas, personas2])) 
+    max_msg_len     = max_seq_length(np.concatenate([triples[:, 0], triples2[:, 0]])) + 5
+    max_reply_len   = max_seq_length(np.concatenate([triples[:, 1], triples2[:, 1]])) + 5
     
     # write the vocab and max lengths to a file
     with open(VOCAB_FN, 'wt') as f:
@@ -276,6 +319,7 @@ def build_vocab_file(verbose=0):
         print("Max persona length: %d" % max_persona_len)
         print("Max message length: %d" % max_msg_len)
         print("Max reply length: %d" % max_reply_len)
+        print("Vocab Lenght: %d" % len(tokenizer.word_index))
 
 ''' Returns numpy array of words in vocab,
     persona_length, max message length 
@@ -406,7 +450,9 @@ def max_seq_length(lines):
 
 if __name__ == '__main__':
     # test dataset loading works correctly
-    personas, triples = load_dataset(TRAIN_FN, verbose=1)
-    conversations = load_movie_dataset(MOVIE_FN, verbose=1)
+    #personas, triples = load_dataset(TRAIN_FN, verbose=1)
+    #conversations = load_movie_dataset(MOVIE_FN, verbose=1)
+    #dialogue_conversations = load_dailydialogue_dataset(DAILYDIALOGUE_FN, verbose=1)
     vocab, persona_length, message_length, reply_length = get_vocab(True, verbose=1)
+    
     

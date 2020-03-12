@@ -3,12 +3,11 @@
 @author: Fady Benattayallah
 """
 
-import numpy as np
 import argparse
 import text_preprocessing as pre
 import seq2seq_model as seq2seq
 import autoencoder_model as autoenc
-
+from tensorflow.keras.models import load_model
 
 
 ''' Evaluate a model by calculating Perplexity and F1 score '''
@@ -28,7 +27,19 @@ def evaluate_by_auto_metrics(model, sources, dataset_not_encoded, tokenizer, ver
             print('msg=[%s], reply=[%s], predicted=[%s]' % (src, target, pred))
         target_sentences.append(target)
         predicted_sentences.append(pred)
+
+''' Generate a reply given an input_msg (not included prepended persona), can calculate which model is specified from inputs '''
+def reply(tokenizer, persona, input_msg, max_persona_length, max_message_length, max_reply_length, model=None, encoder_model=None, decoder_model=None):
+    if model != None:
+        # use auto encoder model, prepend persona to input message
+        input_msg = persona + ' ' + pre.SEP_SEQ_TOKEN + ' ' + input_msg
+        return autoenc.generate_reply_autoencoder(model, tokenizer, input_msg, max_persona_length + max_message_length)
     
+    elif encoder_model != None and decoder_model != None:
+        # use seq2seq model, prepend persona to input message
+        input_msg = persona + ' ' + pre.SEP_SEQ_TOKEN + ' ' + input_msg
+        reply, attn_weights = seq2seq.generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, max_persona_length + max_message_length, max_reply_length) 
+        return reply
     
 def str2bool(s):
     if isinstance(s, bool):
@@ -60,7 +71,12 @@ if __name__ == '__main__':
     parser.add_argument("--eval", default=None, type=str, choices=model_choices,
                         help="Name of the model to eval, must have already been trained.")
     
+    parser.add_argument("--talk", default=None, type=str, choices=model_choices,
+                        help="Load the chosen model which has been trained and talk through the command line")
+    
     args = parser.parse_args()
+    
+    # 0 autoenc, 1 seq2seq, 3 multiple encoders, 4 merge
     
     if args.train != None:
         if args.train == model_choices[0]:
@@ -85,4 +101,39 @@ if __name__ == '__main__':
             pass
         elif args.eval == model_choices[3]:
             pass
-    
+
+    if args.talk != None:
+        model = None
+        encoder_model = None
+        decoder_model = None
+        vocab, persona_length, msg_length, reply_length = pre.get_vocab()
+        tokenizer = pre.fit_tokenizer(vocab)
+        
+        if args.talk == model_choices[0]:
+            model = load_model(pre.AUTOENC_MODEL_FN)
+            
+        elif args.talk == model_choices[1]:
+            encoder_model = load_model(pre.SEQ2SEQ_ENCODER_MODEL_FN)
+            decoder_model = load_model(pre.SEQ2SEQ_DECODER_MODEL_FN)
+            
+        elif args.talk == model_choices[2]:
+            pass
+        elif args.talk == model_choices[3]:
+            pass
+        
+        while True:
+            persona, _ = pre.load_dataset(pre.TRAIN_FN)
+            persona = persona[0]
+            
+            print("Talking with %s model, enter <exit> to close this program\n" % args.talk)
+            print("Persona: %s" % persona)
+            msg = input("Enter your message: ")
+            
+            if msg == "<exit>":
+                break
+            
+            msg = pre.clean_line(msg)
+            response = reply(tokenizer, persona, msg, persona_length, msg_length, reply_length, model, encoder_model, decoder_model)
+            
+            print("Reply: %s\n" % response)
+        

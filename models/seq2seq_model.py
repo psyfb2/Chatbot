@@ -18,14 +18,15 @@ def pre_train_seq2seq_movie(LSTM_DIM, EPOCHS, BATCH_SIZE, CLIP_NORM, DROPOUT, tr
     vocab_size = len(tokenizer.word_index) + 1
     vocab = None
     
-    in_seq_length = persona_length + 1 + msg_length
-    out_seq_length = reply_length + 1
+    in_seq_length = persona_length + msg_length
+    out_seq_length = reply_length
     
     print('Vocab size: %d' % vocab_size)
     print('Input sequence length: %d' % in_seq_length)
     print('Output sequence length: %d' % out_seq_length)
     
     movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
+    movie_conversations = movie_conversations[:5] ######################### 
     
     encoder_input  = movie_conversations[:, 0]
     decoder_input  = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] for row in movie_conversations])
@@ -209,12 +210,46 @@ def pre_train_seq2seq_movie(LSTM_DIM, EPOCHS, BATCH_SIZE, CLIP_NORM, DROPOUT, tr
     
     # do some dummy text generation
     for i in range(len(raw)):
-        input_seq = encoder_input[i:i+1]
-        reply, _ = generate_reply_seq2seq(input_seq, out_seq_length, tokenizer, encoder_model, decoder_model)
+        reply, _ = generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, raw[i], in_seq_length, out_seq_length)
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
     
     return model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length
+    
+def pre_train_seq2seq_dailydialogue(model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length, train_by_batch, BATCH_SIZE, EPOCHS):
+    conversations = pre.load_dailydialogue_dataset()
+    conversations = conversations[:5] ############################################
+    vocab_size = len(tokenizer.word_index) + 1
+    
+    encoder_input  = conversations[:, 0]
+    decoder_input  = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] for row in conversations])
+    decoder_target = np.array([row[1] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
+    
+    raw = encoder_input[:20]
+    
+    # integer encode training data
+    encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
+    decoder_input  = pre.encode_sequences(tokenizer, out_seq_length, decoder_input)
+    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
+    
+    if train_by_batch:
+        train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS)
+    else:
+        decoder_target = pre.encode_output(decoder_target, vocab_size)
+        model.fit([encoder_input, decoder_input], decoder_target,
+                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)  
+        
+    model.save(pre.SEQ2SEQ_MODEL_FN)
+    
+    print("Finished Pre-training on daily dialogue for %d epochs" % EPOCHS)
+    
+    # do some dummy text generation
+    for i in range(len(raw)):
+        reply, _ = generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, raw[i], in_seq_length, out_seq_length)
+        print("Message:", raw[i])
+        print("Reply:", reply + "\n")
+    
+    return model
     
     
 ''' Train sequence to sequence model with attention ans save the model to file '''
@@ -224,10 +259,11 @@ def train_seq2seq(LSTM_DIM=512, EPOCHS=100, BATCH_SIZE=128, CLIP_NORM=5, DROPOUT
         LSTM_DIM, 0, BATCH_SIZE, CLIP_NORM, DROPOUT, train_by_batch)
     vocab_size = len(tokenizer.word_index) + 1
     
-    # pretrain the model on daily dialogue to get a sense for question and answering
-    
+    # pretrain the model on daily dialogue to get a sense for natural conversations
+    model = pre_train_seq2seq_dailydialogue(model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length, train_by_batch, BATCH_SIZE, 0)
     
     train_personas, train = pre.load_dataset(pre.TRAIN_FN)
+    train = train[:2]
     
     # train is a numpy array containing triples [message, reply, persona_index]
     # personas is an numpy array of strings for the personas
@@ -265,15 +301,18 @@ def train_seq2seq(LSTM_DIM=512, EPOCHS=100, BATCH_SIZE=128, CLIP_NORM=5, DROPOUT
     encoder_model.save(pre.SEQ2SEQ_ENCODER_MODEL_FN)
     decoder_model.save(pre.SEQ2SEQ_DECODER_MODEL_FN) 
     
+    print("Finished training on PERSONA-CHAT for %d epochs" % EPOCHS)
+    
     # do some dummy text generation
     for i in range(len(raw)):
-        input_seq = encoder_input[i:i+1]
-        reply, _ = generate_reply_seq2seq(input_seq, out_seq_length, tokenizer, encoder_model, decoder_model)
+        reply, _ = generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, raw[i], in_seq_length, out_seq_length)
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
         
 ''' Generates a reply for a trained sequence to sequence model '''
-def generate_reply_seq2seq(input_seq, max_out_seq_length, tokenizer, encoder_model, decoder_model):
+def generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_seq_length, out_seq_length):
+    input_seq = pre.encode_sequences(tokenizer, in_seq_length, input_msg)
+    
     # get the hidden and cell state from the encoder
     encoder_outputs, h1, c1, h2, c2, h3, c3, h4, c4 = encoder_model.predict(input_seq)
     
@@ -290,7 +329,7 @@ def generate_reply_seq2seq(input_seq, max_out_seq_length, tokenizer, encoder_mod
         attn_weights.append((word_index, attn_weights))
         prev_word = pre.index_to_word(word_index, tokenizer)
         
-        if prev_word == pre.END_SEQ_TOKEN or len(reply) >= max_out_seq_length or prev_word == None:
+        if prev_word == pre.END_SEQ_TOKEN or len(reply) >= out_seq_length or prev_word == None:
             break
         
         reply.append(prev_word)
@@ -320,4 +359,3 @@ def train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_
                 print("BATCH %d / %d - loss: %f" % (i + BATCH_SIZE, encoder_input.shape[0], l))
             
         print("Mean loss in epoch %d : %f : " % (epoch + 1, np.mean(losses)))
-        
