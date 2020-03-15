@@ -67,6 +67,8 @@ if __name__ == '__main__':
     parser.add_argument("--batch_generator", default=True, type=str2bool,
                         help="Whether to generate sequence data batch by batch, when True will save considerable memory however training will be slower, default = True")
     
+    parser.add_argument("--glove_filename", default="glove.6B.300d.txt", type=str,
+                        help="The GLoVe filename to use e.g. glove.840B.300d.txt. Will automatically prepend data path")
     
     parser.add_argument("--eval", default=None, type=str, choices=model_choices,
                         help="Name of the model to eval, must have already been trained.")
@@ -75,6 +77,8 @@ if __name__ == '__main__':
                         help="Load the chosen model which has been trained and talk through the command line")
     
     args = parser.parse_args()
+    
+    pre.GLOVE_FN = "../data/" + args.glove_filename
     
     # 0 autoenc, 1 seq2seq, 3 multiple encoders, 4 merge
     
