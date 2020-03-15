@@ -104,6 +104,6 @@ venv.bak/
 .mypy_cache/
 
 # data files
-/data/*.txt
+/data/glove*.txt
 /data/*.pkl
 /saved_models
