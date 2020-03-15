@@ -110,14 +110,14 @@ def pre_train_seq2seq_movie(LSTM_DIM, EPOCHS, BATCH_SIZE, CLIP_NORM, DROPOUT, tr
     decoder_outputs, _, _ = decoder4(decoder_outputs, initial_state=[initial_state_h4, initial_state_c4])
     
     # Bahdanau attention
-    attn_layer = AttentionLayer()
+    attn_layer = AttentionLayer(LSTM_DIM)
     attn_out, attn_states = attn_layer([encoder_output, decoder_outputs])
 
     # Concat context vector from attention and decoder outputs for prediction
     decoder_concat_outputs = Concatenate(axis=-1)([decoder_outputs, attn_out])
     
     # apply softmax over the whole vocab for every decoder output hidden state
-    dense1 = Dense(n_units * 3, activation="relu")
+    dense1 = Dense(n_units * 2, activation="relu")
     outputs = dense1(decoder_concat_outputs)
     outputs = Dropout(dropout)(outputs)
     dense2 = Dense(vocab_size, activation="softmax")
@@ -240,6 +240,8 @@ def pre_train_seq2seq_dailydialogue(model, encoder_model, decoder_model, tokeniz
                   epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)  
         
     model.save(pre.SEQ2SEQ_MODEL_FN)
+    encoder_model.save(pre.SEQ2SEQ_ENCODER_MODEL_FN)
+    decoder_model.save(pre.SEQ2SEQ_DECODER_MODEL_FN) 
     
     print("Finished Pre-training on daily dialogue for %d epochs" % EPOCHS)
     
@@ -249,7 +251,7 @@ def pre_train_seq2seq_dailydialogue(model, encoder_model, decoder_model, tokeniz
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
     
-    return model
+    return model, encoder_model, decoder_model
     
     
 ''' Train sequence to sequence model with attention ans save the model to file '''
@@ -260,7 +262,7 @@ def train_seq2seq(LSTM_DIM=512, EPOCHS=100, BATCH_SIZE=128, CLIP_NORM=5, DROPOUT
     vocab_size = len(tokenizer.word_index) + 1
     
     # pretrain the model on daily dialogue to get a sense for natural conversations
-    model = pre_train_seq2seq_dailydialogue(model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length, train_by_batch, BATCH_SIZE, 0)
+    model, encoder_model, decoder_model = pre_train_seq2seq_dailydialogue(model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length, train_by_batch, BATCH_SIZE, 0)
     
     train_personas, train = pre.load_dataset(pre.TRAIN_FN)
     train = train[:2]

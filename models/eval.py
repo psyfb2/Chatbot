@@ -8,7 +8,7 @@ import text_preprocessing as pre
 import seq2seq_model as seq2seq
 import autoencoder_model as autoenc
 from tensorflow.keras.models import load_model
-
+from attention import AttentionLayer
 
 ''' Evaluate a model by calculating Perplexity and F1 score '''
 def evaluate_by_auto_metrics(model, sources, dataset_not_encoded, tokenizer, verbose=1):
@@ -113,8 +113,8 @@ if __name__ == '__main__':
             model = load_model(pre.AUTOENC_MODEL_FN)
             
         elif args.talk == model_choices[1]:
-            encoder_model = load_model(pre.SEQ2SEQ_ENCODER_MODEL_FN)
-            decoder_model = load_model(pre.SEQ2SEQ_DECODER_MODEL_FN)
+            encoder_model = load_model(pre.SEQ2SEQ_ENCODER_MODEL_FN, custom_objects={'AttentionLayer': AttentionLayer})
+            decoder_model = load_model(pre.SEQ2SEQ_DECODER_MODEL_FN, custom_objects={'AttentionLayer': AttentionLayer})
             
         elif args.talk == model_choices[2]:
             pass
@@ -124,7 +124,7 @@ if __name__ == '__main__':
         persona, _ = pre.load_dataset(pre.TRAIN_FN)
         persona = persona[0]
         print("Talking with %s model, enter <exit> to close this program\n" % args.talk)
-        print("Persona: %s" % persona)#
+        print("Persona: %s" % persona)
         
         while True:
             msg = input("Enter your message: ")
