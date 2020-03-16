@@ -64,7 +64,7 @@ but also classify which reply from the candidates is the ground truth.
 '''
 
 ''' Load GloVe embedding containing only those words within the tokenizer vocab '''
-def load_glove_embedding(tokenizer, glove_filename=GLOVE_FN):
+def load_glove_embedding(tokenizer, glove_filename):
     # load glove as dictionary {word : embedding, ...} for only the words in
     # the tokenizer vocabulary
     glove_file = open(glove_filename, mode="rt", encoding="utf-8")

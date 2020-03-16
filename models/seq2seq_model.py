@@ -40,7 +40,7 @@ def pre_train_seq2seq_movie(LSTM_DIM, EPOCHS, BATCH_SIZE, CLIP_NORM, DROPOUT, tr
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
     # load GloVe embeddings
-    embedding_matrix = pre.load_glove_embedding(tokenizer)
+    embedding_matrix = pre.load_glove_embedding(tokenizer, pre.GLOVE_FN)
     
     # ------ seq2seq model definition and training ------ #
     n_units = LSTM_DIM

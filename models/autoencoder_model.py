@@ -56,7 +56,7 @@ def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, trai
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
     # load GloVe embeddings
-    embedding_matrix = pre.load_glove_embedding(tokenizer)
+    embedding_matrix = pre.load_glove_embedding(tokenizer, pre.GLOVE_FN)
     
     model = autoencoder_model(vocab_size, in_seq_length, out_seq_length, LSTM_DIMS, embedding_matrix)
     
