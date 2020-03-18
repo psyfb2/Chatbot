@@ -32,9 +32,17 @@ class AttentionLayer(Layer):
             # convert to shape (batch_size, 1, tar_timesteps) for addition
             dec_state_time_axis = tf.expand_dims(dec_state, 1)
             
+            # scores has shape (batch_size, src_timesteps)
             scores = self.V(tf.nn.tanh( self.W1(dec_state_time_axis) + self.W2(enc_outputs) ))
             
-            #attn_weights = tf.
+            attn_weights = tf.nn.softmax(scores, axis=1)
+            
+            return attn_weights, [attn_weights]
+        
+        def context_vector(attn_weights, fake_state):
+            pass
+            #context_vec = attn_weights * 
+            
             
             
         
