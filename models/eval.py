@@ -7,6 +7,7 @@ import argparse
 import text_preprocessing as pre
 import seq2seq_model as seq2seq
 import autoencoder_model as autoenc
+import tensorflow as tf
 from tensorflow.keras.models import load_model
 from attention import AttentionLayer
 
@@ -77,6 +78,11 @@ if __name__ == '__main__':
                         help="Load the chosen model which has been trained and talk through the command line")
     
     args = parser.parse_args()
+    
+    if tf.test.gpu_device_name():
+        print("Using GPU Device: {}\n".format(tf.test.gpu_device_name()))
+    else:
+        print("Using CPU\n")
     
     pre.GLOVE_FN = "../data/" + args.glove_filename
     
