@@ -40,8 +40,22 @@ class AttentionLayer(Layer):
             return attn_weights, [attn_weights]
         
         def context_vector(attn_weights, fake_state):
-            pass
-            #context_vec = attn_weights * 
+            context_vec = attn_weights * enc_outputs
+            context_vec = tf.reduce_sum(context_vec, axis=1)
+            return context_vec, [context_vec]
+        
+        def init_fake_state(inputs, hidden_state_size):
+            # (batch_size, src_timestep, state_size)
+            fake_state = tf.zeros_like(inputs)
+            # (batch_size)
+            fake_state = tf.reduce_sum(fake_state, axis=[1, 2])
+            # (batch_size, 1)
+            fake_state = tf.expand_dims(fake_state)
+            # (batch_size, state_size)
+            fake_state = tf.tile(fake_state, [1, hidden_state_size])
+            
+            return fake_state
+
             
             
             

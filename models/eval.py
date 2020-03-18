@@ -8,8 +8,6 @@ import text_preprocessing as pre
 import seq2seq_model as seq2seq
 import autoencoder_model as autoenc
 import tensorflow as tf
-from tensorflow.compat.v1.keras.backend import set_session
-from tensorflow.compat.v1 import ConfigProto, Session
 from tensorflow.keras.models import load_model
 from attention import AttentionLayer
 
@@ -85,12 +83,8 @@ if __name__ == '__main__':
         print("Using GPU Device: {}\n".format(tf.test.gpu_device_name()))
         
         # consume GPU memory dynamically instead allocating all the memory
-        config = ConfigProto()
-        config.gpu_options.allow_growth = True
-        config.log_device_placement = True
-        
-        sess = Session(config=config)
-        set_session(sess)
+        gpu_devices = tf.config.experimental.list_physical_devices('GPU')
+        tf.config.experimental.set_memory_growth(gpu_devices[0], True)
     else:
         print("Using CPU\n")
     
