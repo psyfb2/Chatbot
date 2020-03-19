@@ -9,7 +9,7 @@ import seq2seq_model as seq2seq
 import autoencoder_model as autoenc
 import tensorflow as tf
 from tensorflow.keras.models import load_model
-from attention import AttentionLayer
+from attention import Attention
 
 ''' Evaluate a model by calculating Perplexity and F1 score '''
 def evaluate_by_auto_metrics(model, sources, dataset_not_encoded, tokenizer, verbose=1):
@@ -79,7 +79,7 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     
-    if tf.test.gpu_device_name() or True:
+    if tf.test.gpu_device_name():
         print("Using GPU Device: {}\n".format(tf.test.gpu_device_name()))
         
         # consume GPU memory dynamically instead allocating all the memory
@@ -127,8 +127,8 @@ if __name__ == '__main__':
             model = load_model(pre.AUTOENC_MODEL_FN)
             
         elif args.talk == model_choices[1]:
-            encoder_model = load_model(pre.SEQ2SEQ_ENCODER_MODEL_FN, custom_objects={'AttentionLayer': AttentionLayer})
-            decoder_model = load_model(pre.SEQ2SEQ_DECODER_MODEL_FN, custom_objects={'AttentionLayer': AttentionLayer})
+            encoder_model = load_model(pre.SEQ2SEQ_ENCODER_MODEL_FN, custom_objects={'Attention': Attention})
+            decoder_model = load_model(pre.SEQ2SEQ_DECODER_MODEL_FN, custom_objects={'Attention': Attention})
             
         elif args.talk == model_choices[2]:
             pass

@@ -5,7 +5,7 @@
 import numpy as np
 import text_preprocessing as pre
 import tensorflow as tf
-from attention import AttentionLayer
+from attention import Attention
 from tensorflow.keras.utils import plot_model
 from tensorflow.keras.layers import LSTM, Dense, Embedding, TimeDistributed, Input, Bidirectional, Concatenate, Dropout
 from tensorflow.keras.models import load_model, Model
@@ -110,14 +110,14 @@ def pre_train_seq2seq_movie(LSTM_DIM, EPOCHS, BATCH_SIZE, CLIP_NORM, DROPOUT, tr
     decoder_outputs, _, _ = decoder4(decoder_outputs, initial_state=[initial_state_h4, initial_state_c4])
     
     # Bahdanau attention
-    attn_layer = AttentionLayer(LSTM_DIM)
+    attn_layer = Attention()
     attn_out, attn_states = attn_layer([encoder_output, decoder_outputs])
 
     # Concat context vector from attention and decoder outputs for prediction
     decoder_concat_outputs = Concatenate(axis=-1)([decoder_outputs, attn_out])
     
     # apply softmax over the whole vocab for every decoder output hidden state
-    dense1 = Dense(n_units * 2, activation="relu")
+    dense1 = Dense(n_units * 3, activation="relu")
     outputs = dense1(decoder_concat_outputs)
     outputs = Dropout(dropout)(outputs)
     dense2 = Dense(vocab_size, activation="softmax")
@@ -258,14 +258,14 @@ def pre_train_seq2seq_dailydialogue(model, encoder_model, decoder_model, tokeniz
 def train_seq2seq(LSTM_DIM=512, EPOCHS=100, BATCH_SIZE=128, CLIP_NORM=5, DROPOUT=0.2, train_by_batch=True):
     # pretrain the model on movie conversations to get a sense of the english language
     model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length = pre_train_seq2seq_movie(
-        LSTM_DIM, 0, BATCH_SIZE, CLIP_NORM, DROPOUT, train_by_batch)
+        LSTM_DIM, 1, BATCH_SIZE, CLIP_NORM, DROPOUT, train_by_batch)
     vocab_size = len(tokenizer.word_index) + 1
     
     # pretrain the model on daily dialogue to get a sense for natural conversations
     model, encoder_model, decoder_model = pre_train_seq2seq_dailydialogue(model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length, train_by_batch, BATCH_SIZE, 0)
     
     train_personas, train = pre.load_dataset(pre.TRAIN_FN)
-    train = train[:2]
+    train = train[:1]
     
     # train is a numpy array containing triples [message, reply, persona_index]
     # personas is an numpy array of strings for the personas
