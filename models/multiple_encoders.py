@@ -22,7 +22,6 @@ def autoencoder_model(vocab_size, src_timesteps, tar_timesteps, n_units):
 
     model.compile(optimizer='adam', loss='categorical_crossentropy')
     model.summary()
-    plot_model(model, to_file=pre.AUTOENC_MODEL_IMAGE_FN, show_shapes=True)
     return model
 
 def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, train_by_batch=True):
