@@ -344,7 +344,6 @@ def generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, i
     give integer encoded decoder target, will one hot encode this per-batch '''
 def train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS, verbose=1):
     for epoch in range(EPOCHS):
-        losses = []
         for i in range(0, encoder_input.shape[0] - BATCH_SIZE + 1, BATCH_SIZE):
             batch_encoder_input = encoder_input[i:i+BATCH_SIZE]
             batch_decoder_input = decoder_input[i:i+BATCH_SIZE]
@@ -357,9 +356,5 @@ def train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_
             l = model.evaluate(
                 [batch_encoder_input, batch_decoder_input], batch_decoder_target)
             
-            losses.append(l)
-            
             if verbose == 1:
                 print("BATCH %d / %d - loss: %f" % (i + BATCH_SIZE, encoder_input.shape[0], l))
-            
-        print("Mean loss in epoch %d : %f : " % (epoch + 1, np.mean(losses)))
