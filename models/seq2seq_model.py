@@ -338,6 +338,8 @@ def generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, i
     
     return " ".join(reply), attn_weights
 
+
+
 ''' Trains the model batch by batch for the purposes of reducing memory usage 
     give integer encoded decoder target, will one hot encode this per-batch '''
 def train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS, verbose=1):

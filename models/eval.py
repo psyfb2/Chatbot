@@ -7,6 +7,7 @@ import argparse
 import text_preprocessing as pre
 import seq2seq_model as seq2seq
 import autoencoder_model as autoenc
+import multiple_encoders as multenc
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 from attention import Attention
@@ -102,7 +103,8 @@ if __name__ == '__main__':
                 BATCH_SIZE=args.batch_size, EPOCHS=args.epochs, train_by_batch=args.batch_generator)
             
         elif args.train == model_choices[2]:
-            pass
+            multenc.train_autoencoder() # just for testing, remove me
+            
         elif args.train == model_choices[3]:
             pass
     
