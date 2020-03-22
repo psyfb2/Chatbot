@@ -27,6 +27,8 @@ SEQ2SEQ_DECODER_MODEL_FN    = "../saved_models/seq2seq_decoder_model.h5"
 AUTOENC_MODEL_IMAGE_FN      = "../saved_models/autoenc_model.png"
 AUTOENC_MODEL_FN            = "../saved_models/autoenc_model.h5"
 
+VERBOSE = 0
+
 
 # punctuation which will not be removed from training/test data
 ALLOWED_CHARS = ['.', ',', '_', '?']

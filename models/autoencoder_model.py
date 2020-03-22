@@ -65,7 +65,7 @@ def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, trai
     else:
         decoder_target = pre.encode_output(decoder_target, vocab_size)
         model.fit(encoder_input, decoder_target,
-                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)     
+                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=pre.VERBOSE)     
     
     # save the model so it can be used for prediction
     model.save(pre.AUTOENC_MODEL_FN)
@@ -99,8 +99,10 @@ def generate_reply_autoencoder(model, tokenizer, input_msg, in_seq_length):
 
 ''' Trains the model batch by batch for the purposes of reducing memory usage 
     give integer encoded decoder target, will one hot encode this per-batch '''
-def train_on_batches(model, encoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS, verbose=1):
+def train_on_batches(model, encoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS):
     for epoch in range(EPOCHS):
+        l = 0.0
+        
         for i in range(0, encoder_input.shape[0] - BATCH_SIZE + 1, BATCH_SIZE):
             batch_encoder_input = encoder_input[i:i+BATCH_SIZE]
             batch_decoder_target = pre.encode_output(
@@ -110,7 +112,9 @@ def train_on_batches(model, encoder_input, decoder_target, vocab_size, BATCH_SIZ
                 batch_encoder_input, batch_decoder_target)
             
             l = model.evaluate(
-                batch_encoder_input, batch_decoder_target)
+                batch_encoder_input, batch_decoder_target, verbose=pre.VERBOSE)
             
-            if verbose == 1:
+            if pre.VERBOSE != 1:
                 print("BATCH %d / %d - loss: %f" % (i + BATCH_SIZE, encoder_input.shape[0], l))
+        
+        print("EPOCH %d loss: %f" % (epoch + 1, l))

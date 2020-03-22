@@ -5,6 +5,9 @@
 import numpy as np
 import text_preprocessing as pre
 import tensorflow as tf
+from math import log
+from copy import copy
+from functools import reduce
 from attention import Attention
 from tensorflow.keras.utils import plot_model
 from tensorflow.keras.layers import LSTM, Dense, Embedding, TimeDistributed, Input, Bidirectional, Concatenate, Dropout
@@ -135,7 +138,7 @@ def pre_train_seq2seq_movie(LSTM_DIM, EPOCHS, BATCH_SIZE, CLIP_NORM, DROPOUT, tr
     else:
         decoder_target = pre.encode_output(decoder_target, vocab_size)
         model.fit([encoder_input, decoder_input], decoder_target,
-                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)  
+                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=pre.VERBOSE)  
     
 
     # cannot use trained model directly for inference because of teacher forcing
@@ -194,7 +197,7 @@ def pre_train_seq2seq_movie(LSTM_DIM, EPOCHS, BATCH_SIZE, CLIP_NORM, DROPOUT, tr
                 inf_decoder_input_h2, inf_decoder_input_c2, 
                 inf_decoder_input_h3, inf_decoder_input_c3, 
                 inf_decoder_input_h4, inf_decoder_input_c4],
-        outputs=[inf_output, inf_attn_out, 
+        outputs=[inf_output, inf_attn_states, 
                  inf_decoder_h1, inf_decoder_c1, 
                  inf_decoder_h2, inf_decoder_c2, 
                  inf_decoder_h3, inf_decoder_c3, 
@@ -237,7 +240,7 @@ def pre_train_seq2seq_dailydialogue(model, encoder_model, decoder_model, tokeniz
     else:
         decoder_target = pre.encode_output(decoder_target, vocab_size)
         model.fit([encoder_input, decoder_input], decoder_target,
-                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)  
+                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=pre.VERBOSE)  
         
     model.save(pre.SEQ2SEQ_MODEL_FN)
     encoder_model.save(pre.SEQ2SEQ_ENCODER_MODEL_FN)
@@ -254,8 +257,10 @@ def pre_train_seq2seq_dailydialogue(model, encoder_model, decoder_model, tokeniz
     return model, encoder_model, decoder_model
     
     
-''' Train sequence to sequence model with attention ans save the model to file '''
+
 def train_seq2seq(LSTM_DIM=512, EPOCHS=100, BATCH_SIZE=128, CLIP_NORM=5, DROPOUT=0.2, train_by_batch=True):
+    ''' Train sequence to sequence model with attention ans save the model to file '''
+    
     # pretrain the model on movie conversations to get a sense of the english language
     model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length = pre_train_seq2seq_movie(
         LSTM_DIM, 1, BATCH_SIZE, CLIP_NORM, DROPOUT, train_by_batch)
@@ -296,7 +301,7 @@ def train_seq2seq(LSTM_DIM=512, EPOCHS=100, BATCH_SIZE=128, CLIP_NORM=5, DROPOUT
     else:
         decoder_target = pre.encode_output(decoder_target, vocab_size)
         model.fit([encoder_input, decoder_input], decoder_target,
-                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=1)     
+                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=pre.VERBOSE)     
     
     # save the models
     model.save(pre.SEQ2SEQ_MODEL_FN)
@@ -310,9 +315,10 @@ def train_seq2seq(LSTM_DIM=512, EPOCHS=100, BATCH_SIZE=128, CLIP_NORM=5, DROPOUT
         reply, _ = generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, raw[i], in_seq_length, out_seq_length)
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
-        
-''' Generates a reply for a trained sequence to sequence model '''
+
 def generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_seq_length, out_seq_length):
+    ''' Generates a reply for a trained sequence to sequence model using greedy search '''
+    
     input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
     
     # get the hidden and cell state from the encoder
@@ -328,7 +334,7 @@ def generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, i
         
         # get predicted word by looking at highest node in output softmax layer
         word_index = np.argmax(out_softmax_layer[0, -1, :])
-        attn_weights.append((word_index, attn_weights))
+        attn_weights.append((word_index, attn))
         prev_word = pre.index_to_word(word_index, tokenizer)
         
         if prev_word == pre.END_SEQ_TOKEN or len(reply) >= out_seq_length or prev_word == None:
@@ -338,12 +344,118 @@ def generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, i
     
     return " ".join(reply), attn_weights
 
+def beam_search_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_seq_length, out_seq_length, beam_length = 3):
+    ''' Generates a reply for a trained sequence to sequence model using beam search '''
+    
+    '''
+    No built in implementation of beam search for keras models so build our own, works by
+    1. find beam length most likely next words for each of previous beam length
+       network fragments
+       
+    2. find most likely beam length words from (beam length * vocab_size) possibilities
+       using summed log likelihood probability
+    
+    3. save hidden state, ascociated output tokens and current probability
+       for each most likely beam length token
+    
+    4. if the output token is EOS or out_seq_length reached make this beam a dead end
+    
+    5. repeat until all beams are dead ends
+    
+    6. pick most likely beam lenght sequences according to length normalized
+       log likelihood objective function
+    '''
+    
+    input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
+    encoder_outputs, h1, c1, h2, c2, h3, c3, h4, c4 = encoder_model.predict(input_seq)
+    
+    # beams will store [ [probability, states, word1, word2, ...], ... ]
+    beams = [ [0.0, h1, c1, h2, c2, h3, c3, h4, c4, pre.START_SEQ_TOKEN] for i in range(beam_length)]
+    
+    # store beam length ^ 2 most likely words [ [probability, word_index, beam_index], ... ]
+    most_likely_words = [[0.0, 0, 0] for i in range(beam_length * beam_length)]
+    
+    prob = 0
+    h1 = 1
+    c1 = 2
+    h2 = 3
+    c2 = 4
+    h3 = 5
+    c3 = 6
+    h4 = 7
+    c4 = 8
+    
+    beam_finished = lambda b : b[-1] == pre.END_SEQ_TOKEN or len(b) - c4 - 1 >= out_seq_length
+    while not reduce(lambda a, b : a and b , map(beam_finished, beams)):
+    
+        # find beam length most likely words out of all beams (vocab_size * beam length possibilities)
+        for b_index in range(len(beams)):
+            b = beams[b_index]
+            prev_word = b[-1]
+            
+            if prev_word == pre.END_SEQ_TOKEN:
+                # dead end beam so don't generate a new token, update states 
+                # and leave most_likely_words for this beam constant
+                continue
+                
+            out_softmax_layer, _, b[h1], b[c1], b[h2], b[c2], b[h3], b[c3], b[h4], b[c4] = decoder_model.predict(
+                    [pre.encode_sequences(tokenizer, 1, prev_word)[0], encoder_outputs,
+                     b[h1], b[c1], b[h2], b[c2], b[h3], b[c3], b[h4], b[c4]])
+            
+            # store beam length most likely words and there probabilities for this beam
+            out_softmax_layer = out_softmax_layer[0, -1, :]
+            most_likely_indicies = out_softmax_layer.argsort()[-beam_length:][::-1]
+     
+            i_ = 0
+            for i in range(beam_length * b_index, beam_length * (b_index + 1) ):
+                # summed log likelihood probability
+                most_likely_words[i][0] = beams[b_index][prob] + log(
+                    out_softmax_layer[most_likely_indicies[i_]]) 
+                
+                # word_index in tokenizer
+                most_likely_words[i][1] = most_likely_indicies[i_]
+                
+                # beam index
+                most_likely_words[i][2] = b_index
+                i_ += 1
+            
+        # chose beam length most likely words out of beam length ^ 2 possible words
+        # by their length normalized log likelihood probabilities descending
+        # using a beam penalty of 1.0
+        most_likely_words = sorted(
+            most_likely_words, key = lambda l:l[0] / (len(beams[l[2]]) - c4 - 1), reverse=True)[:beam_length]
+        
+        # save network fragments for the most likely words
+        temp_beams = [[] for i in range(beam_length)]
+        for i in range(most_likely_words):
+            old_beam = copy(beams[most_likely_words[i][2]])
+            old_beam[prob] = most_likely_words[i][0]
+            
+            # prevent EOS token being continually appended for dead end beams
+            if old_beam[-1] != pre.END_SEQ_TOKEN:
+                old_beam.append(pre.index_to_word(most_likely_words[i][1], tokenizer))
+            
+            # beam state was already saved in the first step
+            
+            temp_beams[i] = old_beam
+            
+        beams = temp_beams
+    
+    # sort beams by length normalized log likelihood descending and only keep text
+    replys = [" ".join(b[c4 + 2:-1]) 
+              for b in sorted(beams, key = lambda b:b[0] / (len(b) - c4 - 1), reverse=True)]
+    
+    # return list of beam length reply's from most likely to least likely
+    return replys
 
 
-''' Trains the model batch by batch for the purposes of reducing memory usage 
-    give integer encoded decoder target, will one hot encode this per-batch '''
-def train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS, verbose=1):
+def train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS):
+    ''' Trains the model batch by batch for the purposes of reducing memory usage 
+        give integer encoded decoder target, will one hot encode this per-batch '''
+        
     for epoch in range(EPOCHS):
+        l = 0.0
+        
         for i in range(0, encoder_input.shape[0] - BATCH_SIZE + 1, BATCH_SIZE):
             batch_encoder_input = encoder_input[i:i+BATCH_SIZE]
             batch_decoder_input = decoder_input[i:i+BATCH_SIZE]
@@ -354,7 +466,9 @@ def train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_
                 [batch_encoder_input, batch_decoder_input], batch_decoder_target)
             
             l = model.evaluate(
-                [batch_encoder_input, batch_decoder_input], batch_decoder_target)
+                [batch_encoder_input, batch_decoder_input], batch_decoder_target, verbose=pre.VERBOSE)
             
-            if verbose == 1:
+            if pre.VERBOSE != 0:
                 print("BATCH %d / %d - loss: %f" % (i + BATCH_SIZE, encoder_input.shape[0], l))
+        
+        print("EPOCH %d loss: %f" % (epoch + 1, l))

@@ -9,6 +9,10 @@ from tensorflow.keras.backend import rnn
 
 class Attention(Layer):
     def __init__(self, **kwargs):
+        ''' 
+        Implements additive bahdanau style attention
+        https://arxiv.org/pdf/1508.04025.pdf
+        '''
         super(Attention, self).__init__(**kwargs)
 
     def build(self, input_shape):
