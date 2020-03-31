@@ -36,6 +36,8 @@ def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, trai
     # feed the model data pairs of (persona + message, reply)
     train_personas, train = pre.load_dataset(pre.TRAIN_FN)
     
+    train = train[:2] ####################
+    
     # train is a numpy array containing triples [message, reply, persona_index]
     # personas is an numpy array of strings for the personas
 
@@ -100,9 +102,10 @@ def generate_reply_autoencoder(model, tokenizer, input_msg, in_seq_length):
 ''' Trains the model batch by batch for the purposes of reducing memory usage 
     give integer encoded decoder target, will one hot encode this per-batch '''
 def train_on_batches(model, encoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS):
+    batch_encoder_input = None
+    batch_decoder_target = None
+    
     for epoch in range(EPOCHS):
-        l = 0.0
-        
         for i in range(0, encoder_input.shape[0] - BATCH_SIZE + 1, BATCH_SIZE):
             batch_encoder_input = encoder_input[i:i+BATCH_SIZE]
             batch_decoder_target = pre.encode_output(
@@ -111,10 +114,11 @@ def train_on_batches(model, encoder_input, decoder_target, vocab_size, BATCH_SIZ
             model.train_on_batch(
                 batch_encoder_input, batch_decoder_target)
             
-            l = model.evaluate(
-                batch_encoder_input, batch_decoder_target, verbose=pre.VERBOSE)
-            
             if pre.VERBOSE != 1:
+                l = model.evaluate(
+                batch_encoder_input, batch_decoder_target, verbose=pre.VERBOSE)
                 print("BATCH %d / %d - loss: %f" % (i + BATCH_SIZE, encoder_input.shape[0], l))
         
+        l = model.evaluate(
+                batch_encoder_input, batch_decoder_target, verbose=pre.VERBOSE)
         print("EPOCH %d loss: %f" % (epoch + 1, l))

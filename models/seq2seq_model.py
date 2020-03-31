@@ -5,17 +5,232 @@
 import numpy as np
 import text_preprocessing as pre
 import tensorflow as tf
+from time import time
 from math import log
 from copy import copy
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 from functools import reduce
-from attention import Attention
+from tensorflow.keras.losses import SparseCategoricalCrossentropy
 from tensorflow.keras.utils import plot_model
 from tensorflow.keras.layers import LSTM, Dense, Embedding, TimeDistributed, Input, Bidirectional, Concatenate, Dropout
-from tensorflow.keras.models import load_model, Model
+from tensorflow.keras.models import load_model
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import ModelCheckpoint
 
-def pre_train_seq2seq_movie(LSTM_DIM, EPOCHS, BATCH_SIZE, CLIP_NORM, DROPOUT, train_by_batch):
+LSTM_DIM = 512
+CLIP_NORM = 5.0
+DROPOUT = 0.2
+
+
+class Encoder(tf.keras.Model):
+    ''' 4 Layer Bidirectional LSTM '''
+    def __init__(self, vocab_size, embedding_matrix, n_units, batch_size):
+        super(Encoder, self).__init__()
+        self.n_units = n_units
+        self.batch_size = batch_size
+        
+        self.embedding = Embedding(vocab_size, embedding_matrix.shape[1], weights=[embedding_matrix], trainable=True, mask_zero=True, name="enc_embedding")
+        
+        self.lstm1 = Bidirectional(
+            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm1"), name="enc_lstm1_bi")
+        
+        self.lstm2 = Bidirectional(
+            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm2"), name="enc_lstm2_bi")
+        
+        self.lstm3 = Bidirectional(
+            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm3"), name="enc_lstm3_bi")
+        
+        self.lstm4 = Bidirectional(
+            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm4"), name="enc_lstm4_bi")
+        
+        self.h1_dense = Dense(self.n_units, activation="tanh", name="h1_dense")
+        self.c1_dense = Dense(self.n_units, activation="tanh", name="c1_dense")
+        
+        self.h2_dense = Dense(self.n_units, activation="tanh", name="h2_dense")
+        self.c2_dense = Dense(self.n_units, activation="tanh", name="c2_dense")
+        
+        self.h3_dense = Dense(self.n_units, activation="tanh", name="h3_dense")
+        self.c3_dense = Dense(self.n_units, activation="tanh", name="c3_dense")
+        
+        self.h4_dense = Dense(self.n_units, activation="tanh", name="h4_dense")
+        self.c4_dense = Dense(self.n_units, activation="tanh", name="c4_dense")
+        
+    @tf.function
+    def call(self, inputs):
+        '''
+        inputs: [input_utterence, initial_state]
+        returns: encoder_states, [h1, c1, h2, c2, h3, c3, h4, c4]
+        '''
+        input_utterence, initial_state = inputs
+        input_embed = self.embedding(input_utterence)
+        
+        encoder_states, h1, c1, _, _ = self.lstm1(input_embed, initial_state=initial_state)
+        encoder_states, h2, c2, _, _ = self.lstm2(encoder_states, initial_state=initial_state)
+        encoder_states, h3, c3, _, _ = self.lstm3(encoder_states, initial_state=initial_state)
+        encoder_states, h4, c4, _, _ = self.lstm4(encoder_states, initial_state=initial_state)
+        
+        # dense layer between encoder and decoder has been show to give better results
+        '''
+        h1 = self.h1_dense(h1)
+        c1 = self.c1_dense(c1)
+        
+        h2 = self.h2_dense(h2)
+        c2 = self.c2_dense(c2)
+        
+        h3 = self.h3_dense(h3)
+        c3 = self.c3_dense(c3)
+        
+        h4 = self.h4_dense(h4)
+        c4 = self.c4_dense(c4)
+        '''
+        
+        return encoder_states, [h1, c1, h2, c2, h3, c3, h4, c4]
+
+    def create_initial_state(self):
+        return tf.zeros((self.batch_size, self.n_units))
+
+
+class Decoder(tf.keras.Model):
+    ''' 4 layer attentive LSTM '''
+    def __init__(self, vocab_size, embedding_matrix, n_units, batch_size):
+        super(Decoder, self).__init__()
+        self.batch_size = batch_size
+        self.n_units = n_units
+        
+        self.embedding = Embedding(vocab_size, embedding_matrix.shape[1], weights=[embedding_matrix], trainable=True, mask_zero=True)
+        
+        self.lstm1 = LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_lstm1")
+        self.lstm2 = LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_lstm2")
+        self.lstm3 = LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_lstm3")
+        self.lstm4 = LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_lstm4")
+        
+        # attention
+        # Ct(s) = V tanh(W1 hs + W2 ht)
+        # where hs is encoder state at timestep s and ht is the current
+        # decoder timestep (which is at timestep t)
+        self.W1 = Dense(n_units)
+        self.W2 = Dense(n_units)
+        self.V  = Dense(1)
+        
+        # from_logits=True in loss function, it will apply the softmax there for us
+        
+        self.out_dense1 = Dense(vocab_size)
+    
+    @tf.function
+    def call(self, inputs):
+        '''
+        inputs = [input_word, encoder_outputs, context_vec, [h1, c1, h2, c2, h3, c3, h4, c4]]
+        input_word shape => (batch_size, 1)
+        encoder_output shape => (batch_size, src_timesteps, n_units * 2)
+        '''
+        input_word, encoder_outputs, context_vec, hidden = inputs
+        h1, c1, h2, c2, h3, c3, h4, c4 = hidden
+        
+        input_embed = self.embedding(input_word)
+
+        # feed previous context vector as input into LSTM along with embedding
+        input_embed = tf.concat([tf.expand_dims(context_vec, axis=1), input_embed], axis=-1)
+        
+        decoder_output, h1, c1 = self.lstm1(input_embed, initial_state=[h1, c1])
+        decoder_output, h2, c2 = self.lstm2(decoder_output, initial_state=[h2, c2])
+        decoder_output, h3, c3 = self.lstm3(decoder_output, initial_state=[h3, c3])
+        decoder_output, h4, c4 = self.lstm4(decoder_output, initial_state=[h4, c4])
+        
+        # ------ Attention ------ #
+        # => (batch_size, 1, n_units)
+        decoder_state = tf.expand_dims(h4, 1)
+        
+        # score shape => (batch_size, src_timesteps, 1)
+        score = self.V(
+            tf.nn.tanh(self.W1(encoder_outputs) + self.W2(decoder_state)) )
+        
+        attn_weights = tf.nn.softmax(score, axis=1)
+        
+        # context vector is a weighted sum of attention weights with encoder outputs
+        context_vec = attn_weights * encoder_outputs
+        # => (batch_size, n_units * 2)
+        context_vec = tf.reduce_sum(context_vec, axis=1)
+        # ------ ------ #
+        
+        # (batch_size, 1, n_units) => (batch_size, n_units)
+        decoder_output = tf.reshape(decoder_output, (-1, decoder_output.shape[2]))
+        
+        # => (batch_size, n_units * 3)
+        decoder_output = tf.concat([decoder_output, context_vec], axis=-1)
+        
+        decoder_output = self.out_dense1(decoder_output)
+        
+        return decoder_output, context_vec, attn_weights, [h1, c1, h2, c2, h3, c3, h4, c4]
+        
+    
+def loss_function(label, pred, loss_object):
+    '''
+    Calculate loss for a single prediction
+    '''
+    mask = tf.math.logical_not(tf.math.equal(label, 0))
+    loss_ = loss_object(label, pred)
+    
+    mask = tf.cast(mask, dtype=loss_.dtype)
+    loss_ *= mask
+    
+    return tf.reduce_mean(loss_)
+
+def train(encoder_input, decoder_target, encoder, decoder, tokenizer, loss_object, optimizer, dataset, BATCH_SIZE, EPOCHS):
+    batches_per_epoch = len(encoder_input) // BATCH_SIZE
+    
+    @tf.function
+    def train_step(encoder_input, decoder_target, encoder_initial_state):
+        '''
+        Perform training on a single batch
+        encoder_input shape  => (batch_size, in_seq_length)
+        decoder_target shape => (batch_size, out_seq_length)
+        '''
+        loss = 0
+        
+        with tf.GradientTape() as tape:
+            encoder_outputs, initial_state = encoder([encoder_input, encoder_initial_state])
+            
+            decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * BATCH_SIZE, 1)
+            context_vec = tf.zeros((encoder_outputs.shape[0], encoder_outputs.shape[-1]))
+            
+            # Teacher forcing, ground truth for previous word input to the decoder at current timestep
+            for t in range(1, decoder_target.shape[1]):
+                predictions, context_vec, _, initial_state = decoder([decoder_input, encoder_outputs, context_vec, initial_state])
+                
+                loss += loss_function(decoder_target[:, t], predictions, loss_object)
+                
+                decoder_input = tf.expand_dims(decoder_target[:, t], 1)
+            
+            # backpropegate loss for this training example
+        batch_loss = (loss / int(decoder_target.shape[1]))
+            
+        variables = encoder.trainable_variables + decoder.trainable_variables
+    
+        gradients = tape.gradient(loss, variables)
+            
+        optimizer.apply_gradients(zip(gradients, variables))
+            
+        return batch_loss
+    
+    for epoch in range(EPOCHS):
+        start = time()
+        
+        encoder_init = encoder.create_initial_state()
+        encoder_init = [encoder_init] * 4
+        total_loss = 0
+        
+        for (batch, (encoder_input, decoder_target)) in enumerate(dataset.take(batches_per_epoch)):
+            batch_loss = train_step(encoder_input, decoder_target, encoder_init)
+            total_loss += batch_loss
+            
+            if batch % 100 == 0 or True:
+                print("Epoch %d: Batch %d: Loss %f" % (epoch + 1, batch, batch_loss.numpy()))
+        
+        print("Epoch %d --- %d sec: Loss %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch))
+            
+
+def train_seq2seq(EPOCHS, BATCH_SIZE):
     vocab, persona_length, msg_length, reply_length = pre.get_vocab()
     tokenizer = pre.fit_tokenizer(vocab)
     vocab_size = len(tokenizer.word_index) + 1
@@ -28,321 +243,195 @@ def pre_train_seq2seq_movie(LSTM_DIM, EPOCHS, BATCH_SIZE, CLIP_NORM, DROPOUT, tr
     print('Input sequence length: %d' % in_seq_length)
     print('Output sequence length: %d' % out_seq_length)
     
+    # ------ Pretrain on Movie dataset ------ #
+    movie_epochs = 25
     movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
-    movie_conversations = movie_conversations[:5] ######################### 
+    movie_conversations = movie_conversations[:BATCH_SIZE] ######################### 
     
     encoder_input  = movie_conversations[:, 0]
-    decoder_input  = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] for row in movie_conversations])
-    decoder_target = np.array([row[1] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
+    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
     
     raw = encoder_input[:20]
-    
+
     # integer encode training data
     encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
-    decoder_input  = pre.encode_sequences(tokenizer, out_seq_length, decoder_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
+    
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, decoder_target))
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
     
     # load GloVe embeddings
     embedding_matrix = pre.load_glove_embedding(tokenizer, pre.GLOVE_FN)
-    
-    # ------ seq2seq model definition and training ------ #
-    n_units = LSTM_DIM
-    dropout = DROPOUT
-    src_timesteps = in_seq_length
-    tar_timesteps = out_seq_length
-    
-    e_dim = embedding_matrix.shape[1]
-    embedding = Embedding(vocab_size, e_dim, weights=[embedding_matrix], input_length=None , trainable=True, mask_zero=True)
-    
-    # LSTM 4-layer Bi-directional encoder
-    input_utterence = Input(shape=(src_timesteps,))
-    encoder_inputs = embedding(input_utterence)
-    
-    encoder1 = Bidirectional(LSTM(n_units, return_sequences=True, return_state=True))
-    encoder_output, h1_fwd, c1_fwd, _, _ = encoder1(encoder_inputs)
-    
-    encoder2 = Bidirectional(LSTM(n_units, return_sequences=True, return_state=True))
-    encoder_output, h2_fwd, c2_fwd, _, _ = encoder2(encoder_output)
-    
-    encoder3 = Bidirectional(LSTM(n_units, return_sequences=True, return_state=True))
-    encoder_output, h3_fwd, c3_fwd, _, _ = encoder3(encoder_output)
-    
-    encoder4 = Bidirectional(LSTM(n_units, return_sequences=True, return_state=True))
-    encoder_output, h4_fwd, c4_fwd, _, _ = encoder4(encoder_output)
-    
-    # hidden layer between encoder final state and decoder initial state has shown to be better
-    encoder_dense_h1 = Dense(n_units, activation="tanh")
-    initial_state_h1 = encoder_dense_h1(h1_fwd)
-    
-    encoder_dense_c1 = Dense(n_units, activation="tanh")
-    initial_state_c1 = encoder_dense_c1(c1_fwd)
-    
-    encoder_dense_h2 = Dense(n_units, activation="tanh")
-    initial_state_h2 = encoder_dense_h2(h2_fwd)
-    
-    encoder_dense_c2 = Dense(n_units, activation="tanh")
-    initial_state_c2 = encoder_dense_c2(c2_fwd)
-    
-    encoder_dense_h3 = Dense(n_units, activation="tanh")
-    initial_state_h3 = encoder_dense_h3(h3_fwd)
-    
-    encoder_dense_c3 = Dense(n_units, activation="tanh")
-    initial_state_c3 = encoder_dense_c3(c3_fwd)
-    
-    encoder_dense_h4 = Dense(n_units, activation="tanh")
-    initial_state_h4 = encoder_dense_h4(h4_fwd)
-    
-    encoder_dense_c4 = Dense(n_units, activation="tanh")
-    initial_state_c4 = encoder_dense_c4(c4_fwd)
-    
-    
-    # LSTM 4-layer decoder using teacher forcing
-    target_utterence = Input(shape=(tar_timesteps,))
-    decoder_inputs = embedding(target_utterence)
-    
-    decoder1 = LSTM(n_units, return_sequences=True, return_state=True)
-    decoder_outputs, _, _ = decoder1(decoder_inputs, initial_state=[initial_state_h1, initial_state_c1])
-    
-    decoder2 = LSTM(n_units, return_sequences=True, return_state=True)
-    decoder_outputs, _, _ = decoder2(decoder_outputs, initial_state=[initial_state_h2, initial_state_c2])
-    
-    decoder3 = LSTM(n_units, return_sequences=True, return_state=True)
-    decoder_outputs, _, _ = decoder3(decoder_outputs, initial_state=[initial_state_h3, initial_state_c3])
-    
-    decoder4 = LSTM(n_units, return_sequences=True, return_state=True)
-    decoder_outputs, _, _ = decoder4(decoder_outputs, initial_state=[initial_state_h4, initial_state_c4])
-    
-    # Bahdanau attention
-    attn_layer = Attention()
-    attn_out, attn_states = attn_layer([encoder_output, decoder_outputs])
 
-    # Concat context vector from attention and decoder outputs for prediction
-    decoder_concat_outputs = Concatenate(axis=-1)([decoder_outputs, attn_out])
+    encoder = Encoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
+    decoder = Decoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
     
-    # apply softmax over the whole vocab for every decoder output hidden state
-    dense1 = Dense(n_units * 3, activation="relu")
-    outputs = dense1(decoder_concat_outputs)
-    outputs = Dropout(dropout)(outputs)
-    dense2 = Dense(vocab_size, activation="softmax")
-    outputs = dense2(outputs)
-    
-    # treat as a multi-class classification problem where need to predict
-    # P(yi | x1, x2, ..., xn, y1, y2, ..., yi-1)
-    model = Model([input_utterence, target_utterence], outputs)
-    model.compile(optimizer=Adam(clipnorm=CLIP_NORM), loss='categorical_crossentropy')
-    model.summary()
-    plot_model(model, to_file=pre.SEQ2SEQ_MODEL_IMAGE_FN, show_shapes=True)
-    
-    if train_by_batch:
-        train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS)
-    else:
-        decoder_target = pre.encode_output(decoder_target, vocab_size)
-        model.fit([encoder_input, decoder_input], decoder_target,
-                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=pre.VERBOSE)  
-    
+    optimizer = Adam(clipnorm=CLIP_NORM)
+    # will give labels as integers instead of one hot so use sparse CCE
+    loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
 
-    # cannot use trained model directly for inference because of teacher forcing
-    # don't have the ground truth for the target sequence during inference
-    # so instead:
-    # encoder model will encode input sequence and return hidden anc cell states
-    # decoder model receives start of sequence token as first input to generate one word
-    # make this generated word the input for the next time step
-    # repeat until end of sequence token predicted or max seq length reached
-    encoder_model = Model(inputs=input_utterence, 
-                          outputs=[encoder_output,
-                                   initial_state_h1, initial_state_c1,
-                                   initial_state_h2, initial_state_c2,
-                                   initial_state_h3, initial_state_c3,
-                                   initial_state_h4, initial_state_c4])
+    train(encoder_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, dataset, BATCH_SIZE, movie_epochs)
     
-    
-    inf_decoder_utterence = Input(shape=(1,))
-    encoder_input_states  = Input(shape=(src_timesteps, n_units * 2))
-    
-    inf_decoder_input_h1  = Input(shape=(n_units,))
-    inf_decoder_input_c1  = Input(shape=(n_units,))
-    
-    inf_decoder_input_h2  = Input(shape=(n_units,))
-    inf_decoder_input_c2  = Input(shape=(n_units,))
-    
-    inf_decoder_input_h3  = Input(shape=(n_units,))
-    inf_decoder_input_c3  = Input(shape=(n_units,))
-    
-    inf_decoder_input_h4  = Input(shape=(n_units,))
-    inf_decoder_input_c4  = Input(shape=(n_units,))
-
-    inf_decoder_input     = embedding(inf_decoder_utterence)
-    
-    inf_decoder_out, inf_decoder_h1, inf_decoder_c1 = decoder1(
-        inf_decoder_input, initial_state=[inf_decoder_input_h1, inf_decoder_input_c1])
-    
-    inf_decoder_out, inf_decoder_h2, inf_decoder_c2 = decoder2(
-        inf_decoder_out, initial_state=[inf_decoder_input_h2, inf_decoder_input_c2])
-    
-    inf_decoder_out, inf_decoder_h3, inf_decoder_c3 = decoder3(
-        inf_decoder_out, initial_state=[inf_decoder_input_h3, inf_decoder_input_c3])
-    
-    inf_decoder_out, inf_decoder_h4, inf_decoder_c4 = decoder4(
-        inf_decoder_out, initial_state=[inf_decoder_input_h4, inf_decoder_input_c4])
-    
-    inf_attn_out, inf_attn_states = attn_layer([encoder_input_states, inf_decoder_out])
-    inf_decoder_concat = Concatenate(axis=-1)([inf_decoder_out, inf_attn_out])
-    
-    inf_output = dense1(inf_decoder_concat)
-    inf_output = dense2(inf_output)
-    
-    decoder_model = Model(
-        inputs=[inf_decoder_utterence, encoder_input_states,
-                inf_decoder_input_h1, inf_decoder_input_c1, 
-                inf_decoder_input_h2, inf_decoder_input_c2, 
-                inf_decoder_input_h3, inf_decoder_input_c3, 
-                inf_decoder_input_h4, inf_decoder_input_c4],
-        outputs=[inf_output, inf_attn_states, 
-                 inf_decoder_h1, inf_decoder_c1, 
-                 inf_decoder_h2, inf_decoder_c2, 
-                 inf_decoder_h3, inf_decoder_c3, 
-                 inf_decoder_h4, inf_decoder_c4])
-    # ------ ------ #
-    
-    print("Finished Pre-training on movie conversations for %d epochs" % EPOCHS)
-    
-    # save the models
-    model.save(pre.SEQ2SEQ_MODEL_FN)
-    encoder_model.save(pre.SEQ2SEQ_ENCODER_MODEL_FN)
-    decoder_model.save(pre.SEQ2SEQ_DECODER_MODEL_FN) 
+    print("Finished Pre-training on Cornell Movie Dataset for %d epochs" % movie_epochs)
     
     # do some dummy text generation
     for i in range(len(raw)):
-        reply, _ = generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, raw[i], in_seq_length, out_seq_length)
+        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
+    # ------ ------ #
+        
     
-    return model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length
-    
-def pre_train_seq2seq_dailydialogue(model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length, train_by_batch, BATCH_SIZE, EPOCHS):
+    # ------ Pretrain on Daily Dialogue ------ #
+    daily_epochs = 25
     conversations = pre.load_dailydialogue_dataset()
-    conversations = conversations[:5] ############################################
-    vocab_size = len(tokenizer.word_index) + 1
+    conversations = conversations[:BATCH_SIZE] ##########
     
     encoder_input  = conversations[:, 0]
-    decoder_input  = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] for row in conversations])
-    decoder_target = np.array([row[1] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
+    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
     
     raw = encoder_input[:20]
     
     # integer encode training data
     encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
-    decoder_input  = pre.encode_sequences(tokenizer, out_seq_length, decoder_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
-    if train_by_batch:
-        train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS)
-    else:
-        decoder_target = pre.encode_output(decoder_target, vocab_size)
-        model.fit([encoder_input, decoder_input], decoder_target,
-                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=pre.VERBOSE)  
-        
-    model.save(pre.SEQ2SEQ_MODEL_FN)
-    encoder_model.save(pre.SEQ2SEQ_ENCODER_MODEL_FN)
-    decoder_model.save(pre.SEQ2SEQ_DECODER_MODEL_FN) 
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, decoder_target))
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
     
-    print("Finished Pre-training on daily dialogue for %d epochs" % EPOCHS)
+    train(encoder_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, dataset, BATCH_SIZE, daily_epochs)
+    
+    print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
     
     # do some dummy text generation
     for i in range(len(raw)):
-        reply, _ = generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, raw[i], in_seq_length, out_seq_length)
+        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
+    # ------ ------ #
+        
     
-    return model, encoder_model, decoder_model
-    
-    
-
-def train_seq2seq(LSTM_DIM=512, EPOCHS=100, BATCH_SIZE=128, CLIP_NORM=5, DROPOUT=0.2, train_by_batch=True):
-    ''' Train sequence to sequence model with attention ans save the model to file '''
-    
-    # pretrain the model on movie conversations to get a sense of the english language
-    model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length = pre_train_seq2seq_movie(
-        LSTM_DIM, 1, BATCH_SIZE, CLIP_NORM, DROPOUT, train_by_batch)
-    vocab_size = len(tokenizer.word_index) + 1
-    
-    # pretrain the model on daily dialogue to get a sense for natural conversations
-    model, encoder_model, decoder_model = pre_train_seq2seq_dailydialogue(model, encoder_model, decoder_model, tokenizer, in_seq_length, out_seq_length, train_by_batch, BATCH_SIZE, 0)
-    
-    train_personas, train = pre.load_dataset(pre.TRAIN_FN)
-    train = train[:1]
+    # ------ Train on PERSONA-CHAT ------ #
+    train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
+    train_data = train_data[:BATCH_SIZE] ################
     
     # train is a numpy array containing triples [message, reply, persona_index]
     # personas is an numpy array of strings for the personas
     
-    # need 3 arrays to fit the seq2seq model as will be using teacher forcing
-    # encoder_input which is persona prepended to message, integer encoded and padded
-    # for all messages so will have shape (utterances, in_seq_length)
-    
-    # decoder_input which is the reponse to the input, integer_encoded and padded
-    # for all messages so will have shape (utterances, out_seq_length)
-    
-    # decoder_target which is the response to the input with an end of sequence token
-    # appended, one_hot encoded and padded. shape (utterances, out_seq_length, vocab_size)
-    encoder_input  = np.array([train_personas[int(row[2])] + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in train])
-    decoder_input  = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] for row in train])
-    decoder_target = np.array([row[1] + ' ' + pre.END_SEQ_TOKEN for row in train])
+    encoder_input  = np.array([train_personas[int(row[2])] + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in train_data])
+    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in train_data])
     
     raw = encoder_input[:20]
     
     # integer encode training data
     encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
-    decoder_input  = pre.encode_sequences(tokenizer, out_seq_length, decoder_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, decoder_target))
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
     
-    if train_by_batch:
-        train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS)
-    else:
-        decoder_target = pre.encode_output(decoder_target, vocab_size)
-        model.fit([encoder_input, decoder_input], decoder_target,
-                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=pre.VERBOSE)     
+    train(encoder_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, dataset, BATCH_SIZE, EPOCHS)
     
-    # save the models
-    model.save(pre.SEQ2SEQ_MODEL_FN)
-    encoder_model.save(pre.SEQ2SEQ_ENCODER_MODEL_FN)
-    decoder_model.save(pre.SEQ2SEQ_DECODER_MODEL_FN) 
-    
-    print("Finished training on PERSONA-CHAT for %d epochs" % EPOCHS)
+    print("Finished Training on PERSONA-CHAT for %d epochs" % EPOCHS)
     
     # do some dummy text generation
     for i in range(len(raw)):
-        reply, _ = generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, raw[i], in_seq_length, out_seq_length)
+        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
+        print("Message:", raw[i])
+        print("Reply:", reply + "\n")
+    
+    plot_attention(attn_weights[:len(reply.split(' ')), :len(raw[-1].split(' '))], raw[-1], reply)
+    # ------ ------ #
+    save_seq2seq(encoder, decoder)
+    
+    encoder = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_MODEL_FN)
+    decoder = tf.saved_model.load(pre.SEQ2SEQ_DECODER_MODEL_FN)
+    
+    # do some dummy text generation
+    for i in range(len(raw)):
+        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
 
-def generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_seq_length, out_seq_length):
+
+def save_seq2seq(encoder, decoder):
+    ''' Save the encoder and decoder as tensorflow models to file '''
+    tf.saved_model.save(encoder, pre.SEQ2SEQ_ENCODER_MODEL_FN , signatures=encoder.call.get_concrete_function(
+        [
+            tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='input_utterence'), 
+            [
+                tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='initial_h'), 
+                tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='initial_c')
+            ]
+        ]))
+    
+    tf.saved_model.save(decoder, pre.SEQ2SEQ_DECODER_MODEL_FN , signatures=decoder.call.get_concrete_function(
+        [
+            tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='input_word'), 
+            tf.TensorSpec(shape=[None, None, LSTM_DIM], dtype=tf.float32, name="encoder_output"),
+            tf.TensorSpec(shape=[None, LSTM_DIM * 2], dtype=tf.float32, name="context_vec"),
+            [
+                tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='h1'), 
+                tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='c1'),
+                tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='h2'), 
+                tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='c2'),
+                tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='h3'), 
+                tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='c3'),
+                tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='h4'), 
+                tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='c4')
+            ]
+        ]))
+
+def generate_reply_seq2seq(encoder, decoder, tokenizer, input_msg, in_seq_length, out_seq_length):
     ''' Generates a reply for a trained sequence to sequence model using greedy search '''
     
     input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
+    input_seq = tf.convert_to_tensor(input_seq)
     
-    # get the hidden and cell state from the encoder
-    encoder_outputs, h1, c1, h2, c2, h3, c3, h4, c4 = encoder_model.predict(input_seq)
+    attn_weights = np.zeros((out_seq_length, in_seq_length))
+    
+    encoder_init = [tf.zeros((1, LSTM_DIM))] * 4
+    encoder_out, initial_state = encoder([input_seq, encoder_init])
+    
+    decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]], 0)
+    context_vec = tf.zeros((encoder_out.shape[0], encoder_out.shape[-1]))
     
     reply = []
-    attn_weights = []
-    prev_word = pre.START_SEQ_TOKEN
-    while True:
-        out_softmax_layer, attn, h1, c1, h2, c2, h3, c3, h4, c4 = decoder_model.predict(
-            [pre.encode_sequences(tokenizer, 1, prev_word)[0], encoder_outputs,
-             h1, c1, h2, c2, h3, c3, h4, c4])
+    for t in range(out_seq_length):
+        softmax_layer, context_vec, attn_weights, initial_state = decoder([decoder_input, encoder_out, context_vec, initial_state])
+        
+        attn_score = tf.reshape(attn_score, (-1,))
+        attn_weights[t] = attn_score.numpy()
         
         # get predicted word by looking at highest node in output softmax layer
-        word_index = np.argmax(out_softmax_layer[0, -1, :])
-        attn_weights.append((word_index, attn))
-        prev_word = pre.index_to_word(word_index, tokenizer)
-        
-        if prev_word == pre.END_SEQ_TOKEN or len(reply) >= out_seq_length or prev_word == None:
+        word_index = tf.argmax(softmax_layer[0]).numpy()
+        word = pre.index_to_word(word_index, tokenizer)
+    
+        if word == pre.END_SEQ_TOKEN:
             break
         
-        reply.append(prev_word)
+        reply.append(word)
+        
+        decoder_input = tf.expand_dims([word_index], 0)
     
     return " ".join(reply), attn_weights
+
+def plot_attention(attn_weights, message, reply):
+    ''' Visualize attention weights '''
+    fig = plt.figure(figsize=(10, 10))
+    axis = fig.add_subplot(1, 1, 1)
+    
+    axis.matshow(attn_weights, cmap='viridis')
+    
+    font_size = {'fontsize' : 16}
+    
+    axis.set_xticklabels([''] + message.split(' '), fontdict=font_size, rotation=90)
+    axis.set_yticklabels([''] + reply.split(' '), fontdict=font_size)
+    
+    axis.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    axis.yaxis.set_major_locator(ticker.MultipleLocator(1))
+
+    plt.show()
 
 def beam_search_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_seq_length, out_seq_length, beam_length = 3):
     ''' Generates a reply for a trained sequence to sequence model using beam search '''
@@ -447,28 +536,4 @@ def beam_search_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_s
     
     # return list of beam length reply's from most likely to least likely
     return replys
-
-
-def train_on_batches(model, encoder_input, decoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS):
-    ''' Trains the model batch by batch for the purposes of reducing memory usage 
-        give integer encoded decoder target, will one hot encode this per-batch '''
-        
-    for epoch in range(EPOCHS):
-        l = 0.0
-        
-        for i in range(0, encoder_input.shape[0] - BATCH_SIZE + 1, BATCH_SIZE):
-            batch_encoder_input = encoder_input[i:i+BATCH_SIZE]
-            batch_decoder_input = decoder_input[i:i+BATCH_SIZE]
-            batch_decoder_target = pre.encode_output(
-                decoder_target[i:i+BATCH_SIZE], vocab_size)
-            
-            model.train_on_batch(
-                [batch_encoder_input, batch_decoder_input], batch_decoder_target)
-            
-            l = model.evaluate(
-                [batch_encoder_input, batch_decoder_input], batch_decoder_target, verbose=pre.VERBOSE)
-            
-            if pre.VERBOSE != 0:
-                print("BATCH %d / %d - loss: %f" % (i + BATCH_SIZE, encoder_input.shape[0], l))
-        
-        print("EPOCH %d loss: %f" % (epoch + 1, l))
+    

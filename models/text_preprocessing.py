@@ -12,20 +12,21 @@ from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
 
-TRAIN_FN            = "../data/train_self_original_no_cands.txt"
-TEST_FN             = "../data/valid_self_original_no_cands.txt"
-MOVIE_FN            = "../data/movie_lines.txt"
-DAILYDIALOGUE_FN    = "../data/dialogues_text.txt"
-VOCAB_FN            = "../data/vocab.txt"
-GLOVE_FN            = "../data/glove.6B.300d.txt"
+PROJ_PATH = os.path.abspath(os.path.join(os.path.dirname( __file__ ), os.pardir))
 
-SEQ2SEQ_MODEL_IMAGE_FN      = "../saved_models/seq2seq_model.png"
-SEQ2SEQ_MODEL_FN            = "../saved_models/seq2seq_model.h5"
-SEQ2SEQ_ENCODER_MODEL_FN    = "../saved_models/seq2seq_encoder_model.h5"
-SEQ2SEQ_DECODER_MODEL_FN    = "../saved_models/seq2seq_decoder_model.h5"
+TRAIN_FN            = os.path.join(PROJ_PATH, 'data', 'train_self_original_no_cands.txt')
+TEST_FN             = os.path.join(PROJ_PATH, 'data', 'valid_self_original_no_cands.txt')
+MOVIE_FN            = os.path.join(PROJ_PATH, 'data', 'movie_lines.txt')
+DAILYDIALOGUE_FN    = os.path.join(PROJ_PATH, 'data', 'dialogues_text.txt')
+VOCAB_FN            = os.path.join(PROJ_PATH, 'data', 'vocab.txt')
+GLOVE_FN            = os.path.join(PROJ_PATH, 'data', 'glove.6B.300d.txt')
 
-AUTOENC_MODEL_IMAGE_FN      = "../saved_models/autoenc_model.png"
-AUTOENC_MODEL_FN            = "../saved_models/autoenc_model.h5"
+SEQ2SEQ_MODEL_CHECKPOINT_FN = os.path.join(PROJ_PATH, 'saved_models', 'training_checkpoints', 'seq2seq')
+SEQ2SEQ_ENCODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_encoder_model')
+SEQ2SEQ_DECODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_decoder_model')
+
+AUTOENC_MODEL_IMAGE_FN      = os.path.join(PROJ_PATH, 'saved_models', 'autoenc.png')
+AUTOENC_MODEL_FN            = os.path.join(PROJ_PATH, 'saved_models', 'autoenc.h5')
 
 VERBOSE = 0
 
@@ -95,7 +96,6 @@ def load_glove_embedding(tokenizer, glove_filename):
             embedding_matrix[unique_index] = vec
     
     return embedding_matrix
-
 
 ''' Returns a keras tokenizer fitted on the given text '''
 def fit_tokenizer(lines, oov_token=True):
