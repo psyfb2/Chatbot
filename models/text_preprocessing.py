@@ -21,9 +21,11 @@ DAILYDIALOGUE_FN    = os.path.join(PROJ_PATH, 'data', 'dialogues_text.txt')
 VOCAB_FN            = os.path.join(PROJ_PATH, 'data', 'vocab.txt')
 GLOVE_FN            = os.path.join(PROJ_PATH, 'data', 'glove.6B.300d.txt')
 
-SEQ2SEQ_MODEL_CHECKPOINT_FN = os.path.join(PROJ_PATH, 'saved_models', 'training_checkpoints', 'seq2seq')
 SEQ2SEQ_ENCODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_encoder_model')
 SEQ2SEQ_DECODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_decoder_model')
+
+SEQ2SEQ_ENCODER_DEEP_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_encoder_deep_model')
+SEQ2SEQ_DECODER_DEEP_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_decoder_deep_model')
 
 AUTOENC_MODEL_IMAGE_FN      = os.path.join(PROJ_PATH, 'saved_models', 'autoenc.png')
 AUTOENC_MODEL_FN            = os.path.join(PROJ_PATH, 'saved_models', 'autoenc.h5')

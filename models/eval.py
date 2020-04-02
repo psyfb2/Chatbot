@@ -10,7 +10,6 @@ import seq2seq_model as seq2seq
 import autoencoder_model as autoenc
 import multiple_encoders as multenc
 import tensorflow as tf
-from tensorflow.keras.models import load_model
 
 ''' Evaluate a model by calculating Perplexity and F1 score '''
 def evaluate_by_auto_metrics(model, sources, dataset_not_encoded, tokenizer, verbose=1):
@@ -30,32 +29,35 @@ def evaluate_by_auto_metrics(model, sources, dataset_not_encoded, tokenizer, ver
         target_sentences.append(target)
         predicted_sentences.append(pred)
 
-''' Generate a reply given an input_msg (not included prepended persona), can calculate which model is specified from inputs '''
-def reply(tokenizer, persona, input_msg, max_persona_length, max_message_length, max_reply_length, model=None, encoder_model=None, decoder_model=None, beam_width=3, show_beams=False):
+
+def reply(tokenizer, persona, input_msg, max_persona_length, max_message_length, max_reply_length, model=None, encoder_model=None, decoder_model=None, include_greedy_search=False, plot_attn=False, beam_width=3):
+    ''' 
+    Generate a list of reply's from most likely to least
+    given an input_msg (not included prepended persona)
+    '''
     input_msg = pre.clean_line(input_msg)
     
     if model != None:
-        # use auto encoder model, prepend persona to input message
-        input_msg = persona + ' ' + pre.SEP_SEQ_TOKEN + ' ' + input_msg
-        return autoenc.generate_reply_autoencoder(model, tokenizer, input_msg, max_persona_length + max_message_length)
+        # use auto encoder model, does not take into account persona
+        return [autoenc.generate_reply_autoencoder(model, tokenizer, input_msg, max_message_length)]
     
     elif encoder_model != None and decoder_model != None:
         # use seq2seq model, prepend persona to input message
-        #input_msg = persona + ' ' + pre.SEP_SEQ_TOKEN + ' ' + input_msg
+        input_msg = persona + ' ' + pre.SEP_SEQ_TOKEN + ' ' + input_msg
         
         # beam search
         replys = seq2seq.beam_search_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, max_persona_length + max_message_length, max_reply_length, beam_width)
         
-        if show_beams:
-            # display greedy search result as well all the beams
-            # greedy search
-            reply, _ = seq2seq.generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, max_persona_length + max_message_length, max_reply_length)
-            print("Greedy Search:", reply, "\n")
-            for r in replys:
-                print("Beam Search:", r)
-            print("")
+        # greedy search
+        if plot_attn or include_greedy_search:
+            reply, attn_weights = seq2seq.generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, max_persona_length + max_message_length, max_reply_length)
+            # return beam search reply's with greeding search reply appended at the end
+            replys.append(reply)
+            
+            if plot_attn:
+                seq2seq.plot_attention(attn_weights[:len(reply.split(' ')), :len(input_msg.split(' '))], input_msg, reply)
         
-        return replys[0]
+        return replys
     
 def str2bool(s):
     if isinstance(s, bool):
@@ -68,7 +70,7 @@ def str2bool(s):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
 if __name__ == '__main__':
-    model_choices = ['autoenc', 'seq2seq', 'multiple_encoders', 'merge']
+    model_choices = ['autoenc', 'seq2seq', 'deep_seq2seq', 'multiple_encoders', 'deep_multiple_encoders', 'transformer']
     parser = argparse.ArgumentParser(description="Train and Evaluate Different Chatbot Models")
     
     # ----------- Train Arguments ----------- #
@@ -80,9 +82,6 @@ if __name__ == '__main__':
     
     parser.add_argument("--epochs", default=100, type=int,
                         help="epochs for training on PERSONA-CHAT dataset, default = 100")
-    
-    parser.add_argument("--batch_generator", default=True, type=str2bool,
-                        help="Whether to generate sequence data batch by batch, when True will save considerable memory however training will be slower, default = True")
     
     parser.add_argument("--verbose", default=1, type=int,
                         help="Display progress bar for each batch during training, default = 1")
@@ -104,7 +103,13 @@ if __name__ == '__main__':
                         help="Beam width to use during beam search, default = 3")
     
     parser.add_argument("--show_beams", default=False, type=str2bool,
-                        help="Generating responses uses beam search, chose whether to show not only the most likely sentence but beam width sentences")
+                        help="Generating responses uses beam search, chose whether to show not only the most likely sentence but beam width sentences, default = False")
+    
+    parser.add_argument("--include_greedy_search", default=False, type=str2bool,
+                        help="On top of beam width responses also show the reply of greedy search, default = False")
+    
+    parser.add_argument("--plot_attention", default=False, type=str2bool,
+                        help="Plot the attention weights for a response generated by greedy search, default = False")
     # ----------- ----------- #
     
     args = parser.parse_args()
@@ -121,20 +126,27 @@ if __name__ == '__main__':
     pre.GLOVE_FN = os.path.join(pre.PROJ_PATH, 'data', args.glove_filename)
     pre.VERBOSE  = args.verbose
     
-    # 0 autoenc, 1 seq2seq, 3 multiple encoders, 4 merge
+    # 0 autoenc, 1 seq2seq, 2 deep_seq2seq, 3 multiple_encoder, 4 deep_multiple_encoders, 5 transformer
     
     if args.train != None:
         if args.train == model_choices[0]:
             autoenc.train_autoencoder(
-                BATCH_SIZE=args.batch_size, EPOCHS=args.epochs, train_by_batch=args.batch_generator)
+                BATCH_SIZE=args.batch_size, EPOCHS=args.epochs)
             
         elif args.train == model_choices[1]:
             seq2seq.train_seq2seq(
-                args.epochs, args.batch_size)
+                args.epochs, args.batch_size, deep_lstm=False)
             
         elif args.train == model_choices[2]:
-            multenc.train_autoencoder() # just for testing, remove me
+            seq2seq.train_seq2seq(
+                args.epochs, args.batch_size, deep_lstm=True)
             
+        elif args.train == model_choices[3]:
+            pass
+        
+        elif args.train == model_choices[4]:
+            pass
+        
         elif args.train == model_choices[3]:
             pass
     
@@ -156,13 +168,16 @@ if __name__ == '__main__':
         tokenizer = pre.fit_tokenizer(vocab)
         
         if args.talk == model_choices[0]:
-            model = load_model(pre.AUTOENC_MODEL_FN)
-            
+            model = tf.keras.models.load_model(pre.AUTOENC_MODEL_FN)
+        
         elif args.talk == model_choices[1]:
-            pass
+            encoder_model = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_MODEL_FN)
+            decoder_model = tf.saved_model.load(pre.SEQ2SEQ_DECODER_MODEL_FN)
             
         elif args.talk == model_choices[2]:
-            pass
+            encoder_model = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_DEEP_MODEL_FN)
+            decoder_model = tf.saved_model.load(pre.SEQ2SEQ_DECODER_DEEP_MODEL_FN)
+        
         elif args.talk == model_choices[3]:
             pass
         
@@ -177,7 +192,10 @@ if __name__ == '__main__':
             if msg == "<exit>":
                 break
             
-            response = reply(tokenizer, persona, msg, persona_length, msg_length, reply_length, model, encoder_model, decoder_model, args.beam_width, args.show_beams)
+            responses = reply(tokenizer, persona, msg, persona_length, msg_length, reply_length, model, encoder_model, decoder_model, args.include_greedy_search, args.plot_attention, args.beam_width)
             
-            print("Reply: %s\n" % response)
+            for i in range(0, len(responses)):
+                print("Reply %d: %s" % (i + 1, responses[i]))
+                
+            print("\n")
         

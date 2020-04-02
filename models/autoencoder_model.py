@@ -34,19 +34,19 @@ def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, trai
     vocab = None
     
     # feed the model data pairs of (persona + message, reply)
-    train_personas, train = pre.load_dataset(pre.TRAIN_FN)
+    _, train = pre.load_dataset(pre.TRAIN_FN)
     
-    train = train[:2] ####################
+    train = train[:BATCH_SIZE] ################
     
     # train is a numpy array containing triples [message, reply, persona_index]
-    # personas is an numpy array of strings for the personas
 
-    encoder_input  = np.array([train_personas[int(row[2])] + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in train])
+    # train this auto_encoder without using persona
+    encoder_input  = train[:, 0]
     decoder_target = train[:, 1]
     
     raw = encoder_input[:20]
     
-    in_seq_length = persona_length + msg_length
+    in_seq_length = msg_length
     out_seq_length = reply_length
     
     print('Vocab size: %d' % vocab_size)
