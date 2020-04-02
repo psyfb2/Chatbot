@@ -36,8 +36,6 @@ def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, trai
     # feed the model data pairs of (persona + message, reply)
     _, train = pre.load_dataset(pre.TRAIN_FN)
     
-    train = train[:BATCH_SIZE] ################
-    
     # train is a numpy array containing triples [message, reply, persona_index]
 
     # train this auto_encoder without using persona

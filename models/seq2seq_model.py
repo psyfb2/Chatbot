@@ -12,11 +12,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from functools import reduce
 from tensorflow.keras.losses import SparseCategoricalCrossentropy
-from tensorflow.keras.utils import plot_model
-from tensorflow.keras.layers import LSTM, Dense, Embedding, TimeDistributed, Input, Bidirectional, Concatenate, Dropout
-from tensorflow.keras.models import load_model
+from tensorflow.keras.layers import LSTM, Dense, Embedding, Bidirectional, Dropout
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import ModelCheckpoint
 
 LSTM_DIM = 512
 CLIP_NORM = 5.0
@@ -299,7 +296,6 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, deep_lstm=False):
     # ------ Pretrain on Movie dataset ------ #
     movie_epochs = 25
     movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
-    movie_conversations = movie_conversations[:BATCH_SIZE] ######################### 
     
     encoder_input  = movie_conversations[:, 0]
     decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
@@ -345,7 +341,6 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, deep_lstm=False):
     # ------ Pretrain on Daily Dialogue ------ #
     daily_epochs = 35
     conversations = pre.load_dailydialogue_dataset()
-    conversations = conversations[:BATCH_SIZE] ##########
     
     encoder_input  = conversations[:, 0]
     decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
@@ -375,7 +370,6 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, deep_lstm=False):
     
     # ------ Train on PERSONA-CHAT ------ #
     train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
-    train_data = train_data[:BATCH_SIZE] ################
     
     # train is a numpy array containing triples [message, reply, persona_index]
     # personas is an numpy array of strings for the personas
@@ -563,7 +557,7 @@ def beam_search_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_s
             out_softmax_layer, _, b[context_vec], *b[initial_state] = decoder_model([decoder_input, encoder_out, b[context_vec], b[initial_state]])
             
             # store beam length most likely words and there probabilities for this beam
-            out_softmax_layer = out_softmax_layer[0]
+            out_softmax_layer = out_softmax_layer[0].numpy()
             most_likely_indicies = out_softmax_layer.argsort()[-beam_length:][::-1]
             
             i_ = 0
