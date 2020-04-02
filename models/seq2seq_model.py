@@ -294,7 +294,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, deep_lstm=False):
     print('Output sequence length: %d' % out_seq_length)
     
     # ------ Pretrain on Movie dataset ------ #
-    movie_epochs = 25
+    movie_epochs = 50
     movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
     
     encoder_input  = movie_conversations[:, 0]
@@ -366,7 +366,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, deep_lstm=False):
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
     # ------ ------ #
-        
+    
     
     # ------ Train on PERSONA-CHAT ------ #
     train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
@@ -400,24 +400,8 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, deep_lstm=False):
     
     plot_attention(attn_weights[:len(reply.split(' ')), :len(raw[-1].split(' '))], raw[-1], reply)
     # ------ ------ #
-    
-    if deep_lstm:
-        encoder_fn = pre.SEQ2SEQ_ENCODER_DEEP_MODEL_FN
-        decoder_fn = pre.SEQ2SEQ_DECODER_DEEP_MODEL_FN
-    else:
-        encoder_fn = pre.SEQ2SEQ_ENCODER_MODEL_FN
-        decoder_fn = pre.SEQ2SEQ_DECODER_MODEL_FN
 
     save_seq2seq(encoder, decoder, deep_lstm)
-    
-    encoder = tf.saved_model.load(encoder_fn)
-    decoder = tf.saved_model.load(decoder_fn)
-    
-    # do some dummy text generation
-    for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
-        print("Message:", raw[i])
-        print("Reply:", reply + "\n")
 
 
 def save_seq2seq(encoder, decoder, deep_lstm):
@@ -538,7 +522,7 @@ def beam_search_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_s
     context_vec = 2
     
     # store beam length ^ 2 most likely words [ [probability, word_index, beam_index], ... ]
-    most_likely_words = [[0.0, 0, 0] for i in range(beam_length * beam_length)]
+    most_likely_words_all = [[0.0, 0, 0] for i in range(beam_length * beam_length)]
     
     beam_finished = lambda b : b[-1] == pre.END_SEQ_TOKEN or len(b) - context_vec - 1 >= out_seq_length
     while not reduce(lambda a, b : a and b , map(beam_finished, beams)):
@@ -557,32 +541,32 @@ def beam_search_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_s
             out_softmax_layer, _, b[context_vec], *b[initial_state] = decoder_model([decoder_input, encoder_out, b[context_vec], b[initial_state]])
             
             # store beam length most likely words and there probabilities for this beam
-            out_softmax_layer = out_softmax_layer[0].numpy()
+            out_softmax_layer = tf.nn.softmax(out_softmax_layer[0]).numpy()
             most_likely_indicies = out_softmax_layer.argsort()[-beam_length:][::-1]
             
             i_ = 0
             for i in range(beam_length * b_index, beam_length * (b_index + 1) ):
                 # summed log likelihood probability
-                most_likely_words[i][0] = b[prob] + log(
+                most_likely_words_all[i][0] = b[prob] + log(
                     out_softmax_layer[most_likely_indicies[i_]]) 
                 
                 # word_index in tokenizer
-                most_likely_words[i][1] = most_likely_indicies[i_]
+                most_likely_words_all[i][1] = most_likely_indicies[i_]
                 
                 # beam index
-                most_likely_words[i][2] = b_index
+                most_likely_words_all[i][2] = b_index
                 i_ += 1
             
         if prev_word == pre.START_SEQ_TOKEN:
             # on first run of beam search choose beam length most likely unique words
             # as this will prevent simply running greedy search beam length times
-            most_likely_words = most_likely_words[:beam_length]
+            most_likely_words = most_likely_words_all[:beam_length]
         else:
             # chose beam length most likely words out of beam length ^ 2 possible words
             # by their length normalized log likelihood probabilities descending
             # using a beam penalty of 1.0
             most_likely_words = sorted(
-                most_likely_words, key = lambda l:l[0] / (len(beams[l[2]]) - context_vec - 1), reverse=True)[:beam_length]
+                most_likely_words_all, key = lambda l:l[0] / (len(beams[l[2]]) - context_vec - 1), reverse=True)[:beam_length]
         
             # most_likely_words must remain constant for dead end beams
             # so make sure index in most_likely_words == b_index for dead end beams
