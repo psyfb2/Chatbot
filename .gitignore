@@ -106,5 +106,4 @@ venv.bak/
 # data files
 /data/glove*.txt
 /data/*.pkl
-!/saved_models/.gitkeep
-/saved_models/*
+#/saved_models/*
