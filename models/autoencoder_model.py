@@ -4,6 +4,7 @@
 """
 import numpy as np
 import text_preprocessing as pre
+from sklearn.model_selection import train_test_split
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import RepeatVector, TimeDistributed, Dense, Embedding, LSTM
 from tensorflow.keras.utils import plot_model
@@ -26,7 +27,7 @@ def autoencoder_model(vocab_size, src_timesteps, tar_timesteps, n_units, embeddi
     #plot_model(model, to_file=pre.AUTOENC_MODEL_IMAGE_FN, show_shapes=True)
     return model
 
-def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, train_by_batch=True):
+def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, PATIENCE=5):
     vocab, persona_length, msg_length, reply_length = pre.get_vocab()
     tokenizer = pre.fit_tokenizer(vocab)
     # + 1 for padding 0 value not in word_index dictionary
@@ -60,17 +61,12 @@ def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, trai
     
     model = autoencoder_model(vocab_size, in_seq_length, out_seq_length, LSTM_DIMS, embedding_matrix)
     
-    if train_by_batch:
-        train_on_batches(model, encoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS)
-    else:
-        decoder_target = pre.encode_output(decoder_target, vocab_size)
-        model.fit(encoder_input, decoder_target,
-                  epochs=EPOCHS, batch_size=BATCH_SIZE, verbose=pre.VERBOSE)     
+    epochs = train_on_batches(model, encoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS, PATIENCE)
     
     # save the model so it can be used for prediction
     model.save(pre.AUTOENC_MODEL_FN)
     
-    print("Trained autoencoder model for %d epochs" % EPOCHS)
+    print("Trained autoencoder model for %d epochs" % epochs)
     
     # do some dummy text generation
     for i in range(len(raw)):
@@ -98,25 +94,54 @@ def generate_reply_autoencoder(model, tokenizer, input_msg, in_seq_length):
     return ' '.join(target)
 
 ''' Trains the model batch by batch for the purposes of reducing memory usage 
-    give integer encoded decoder target, will one hot encode this per-batch '''
-def train_on_batches(model, encoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS):
-    batch_encoder_input = None
-    batch_decoder_target = None
+    give integer encoded decoder target, will one hot encode this per-batch 
+    also will create a validation set from 5% of the train set and do early stopping'''
+def train_on_batches(model, encoder_input, decoder_target, vocab_size, BATCH_SIZE, EPOCHS, PATIENCE):
+    encoder_input, encoder_input_val, decoder_target, decoder_target_val = train_test_split(encoder_input, decoder_target, test_size=0.05)
+    
+    min_val_loss = float("inf")
+    no_improvement_counter = 0
     
     for epoch in range(EPOCHS):
+        loss = train_step(model, encoder_input, decoder_target, vocab_size, BATCH_SIZE, False)
+        val_loss = train_step(model, encoder_input_val, decoder_target_val, vocab_size, BATCH_SIZE, True)
+        
+        if val_loss < min_val_loss:
+            no_improvement_counter = 0
+            min_val_loss = val_loss
+        else:
+            no_improvement_counter += 1
+            
+        print("EPOCH %d loss: %f, val loss: %f" % (epoch + 1, loss, val_loss))
+        
+        if no_improvement_counter >= PATIENCE:
+            print("Early stopping, no improvement over minimum in %d epochs" % PATIENCE)
+            return epoch + 1
+        
+    return EPOCHS
+
+def train_step(model, encoder_input, decoder_target, vocab_size, BATCH_SIZE, only_get_loss=False):
+        loss = 0
         for i in range(0, encoder_input.shape[0] - BATCH_SIZE + 1, BATCH_SIZE):
             batch_encoder_input = encoder_input[i:i+BATCH_SIZE]
             batch_decoder_target = pre.encode_output(
                 decoder_target[i:i+BATCH_SIZE], vocab_size)
             
-            model.train_on_batch(
-                batch_encoder_input, batch_decoder_target)
-            
-            if pre.VERBOSE != 1:
+            if only_get_loss:
                 l = model.evaluate(
-                batch_encoder_input, batch_decoder_target, verbose=pre.VERBOSE)
+                batch_encoder_input, batch_decoder_target, verbose=0)
+            else:
+                model.train_on_batch(
+                    batch_encoder_input, batch_decoder_target)
+                l = model.evaluate(
+                batch_encoder_input, batch_decoder_target, verbose=0)
+                
+            loss += l
+            if pre.VERBOSE != 0:
                 print("BATCH %d / %d - loss: %f" % (i + BATCH_SIZE, encoder_input.shape[0], l))
         
-        l = model.evaluate(
-                batch_encoder_input, batch_decoder_target, verbose=pre.VERBOSE)
-        print("EPOCH %d loss: %f" % (epoch + 1, l))
+        loss = loss / (encoder_input.shape[0] // BATCH_SIZE)
+        return loss
+        
+        
+        

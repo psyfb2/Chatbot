@@ -83,6 +83,9 @@ if __name__ == '__main__':
     parser.add_argument("--epochs", default=100, type=int,
                         help="epochs for training on PERSONA-CHAT dataset, default = 100")
     
+    parser.add_argument("--early_stopping_patience", default=6, type=int,
+                        help="number of consecutive epochs without improvement over validation loss minimum until training is stopped early, default = 6")
+    
     parser.add_argument("--verbose", default=1, type=int,
                         help="Display progress bar for each batch during training, default = 1")
     
@@ -131,7 +134,7 @@ if __name__ == '__main__':
     if args.train != None:
         if args.train == model_choices[0]:
             autoenc.train_autoencoder(
-                BATCH_SIZE=args.batch_size, EPOCHS=args.epochs)
+                BATCH_SIZE=args.batch_size, EPOCHS=args.epochs, PATIENCE=args.early_stopping_patience)
             
         elif args.train == model_choices[1]:
             seq2seq.train_seq2seq(
@@ -194,8 +197,11 @@ if __name__ == '__main__':
             
             responses = reply(tokenizer, persona, msg, persona_length, msg_length, reply_length, model, encoder_model, decoder_model, args.include_greedy_search, args.plot_attention, args.beam_width)
             
-            for i in range(0, len(responses)):
-                print("Reply %d: %s" % (i + 1, responses[i]))
+            print("Reply: %s" % (responses[0]))
+            
+            if args.show_beams or args.include_greedy_search:
+                for i in range(1, len(responses)):
+                    print("Reply %d: %s" % (i + 1, responses[i]))
                 
             print("\n")
         
