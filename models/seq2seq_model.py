@@ -5,20 +5,20 @@
 import numpy as np
 import text_preprocessing as pre
 import tensorflow as tf
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 from time import time
 from math import log
 from copy import copy
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 from functools import reduce
 from tensorflow.keras.losses import SparseCategoricalCrossentropy
 from tensorflow.keras.layers import LSTM, Dense, Embedding, Bidirectional, Dropout
 from tensorflow.keras.optimizers import Adam
+from sklearn.model_selection import train_test_split
 
 LSTM_DIM = 512
 CLIP_NORM = 5.0
 DROPOUT = 0.2
-
 
 class Encoder(tf.keras.Model):
     ''' 1 Layer Bidirectional LSTM '''
@@ -35,7 +35,8 @@ class Encoder(tf.keras.Model):
     @tf.function
     def call(self, input_utterence):
         '''
-        returns: encoder_states, [h1, c1]
+        input => input_utterence
+        returns => encoder_states, h1, c1
         '''
         input_embed = self.embedding(input_utterence)
         
@@ -69,9 +70,8 @@ class Decoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs = [input_word, encoder_outputs, context_vec, [h1, c1]
-        input_word shape => (batch_size, 1)
-        encoder_output shape => (batch_size, src_timesteps, n_units * 2)
+        inputs => [input_word, encoder_outputs, context_vec, [h1, c1]
+        returns => decoder_output, attn_weights, context_vec, h1, c1
         '''
         input_word, encoder_outputs, context_vec, hidden = inputs
         h1, c1 = hidden
@@ -114,7 +114,7 @@ class Decoder(tf.keras.Model):
 class DeepEncoder(tf.keras.Model):
     ''' 4 Layer Bidirectional LSTM '''
     def __init__(self, vocab_size, embedding, n_units, batch_size):
-        super(Encoder, self).__init__()
+        super(DeepEncoder, self).__init__()
         self.n_units = n_units
         self.batch_size = batch_size
         
@@ -135,6 +135,7 @@ class DeepEncoder(tf.keras.Model):
     @tf.function
     def call(self, input_utterence):
         '''
+        input => input_utterence
         returns: encoder_states, h1, c1, h2, c2, h3, c3, h4, c4
         '''
         input_embed = self.embedding(input_utterence)
@@ -150,7 +151,7 @@ class DeepEncoder(tf.keras.Model):
 class DeepDecoder(tf.keras.Model):
     ''' 4 layer attentive LSTM '''
     def __init__(self, vocab_size, embedding, n_units, batch_size):
-        super(Decoder, self).__init__()
+        super(DeepDecoder, self).__init__()
         self.batch_size = batch_size
         self.n_units = n_units
         
@@ -175,9 +176,8 @@ class DeepDecoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs = [input_word, encoder_outputs, context_vec, [h1, c1, h2, c2, h3, c3, h4, c4]]
-        input_word shape => (batch_size, 1)
-        encoder_output shape => (batch_size, src_timesteps, n_units * 2)
+        inputs => [input_word, encoder_outputs, context_vec, [h1, c1, h2, c2, h3, c3, h4, c4]]
+        returns => decoder_output, attn_weights, context_vec, h1, c1, h2, c2, h3, c3, h4, c4
         '''
         input_word, encoder_outputs, context_vec, hidden = inputs
         h1, c1, h2, c2, h3, c3, h4, c4 = hidden
@@ -229,7 +229,32 @@ def loss_function(label, pred, loss_object):
     
     return tf.reduce_mean(loss_)
 
-def train(batches_per_epoch, encoder, decoder, tokenizer, loss_object, optimizer, dataset, BATCH_SIZE, EPOCHS):
+def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, loss_object):
+    total_loss = 0
+    
+    for (batch, (encoder_input, decoder_target)) in enumerate(val_dataset.take(batches_per_epoch)):
+        loss = 0
+        
+        encoder_outputs, *initial_state = encoder(encoder_input)
+        
+        decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_input.shape[0], 1)
+        context_vec = tf.zeros((encoder_outputs.shape[0], encoder_outputs.shape[-1]))
+    
+        for t in range(1, decoder_target.shape[1]):
+            predictions, _, context_vec, *initial_state = decoder([decoder_input, encoder_outputs, context_vec, initial_state])
+            
+            loss += loss_function(decoder_target[:, t], predictions, loss_object)
+            
+            decoder_input = tf.expand_dims(decoder_target[:, t], 1)
+        
+        batch_loss = (loss / int(decoder_target.shape[1]))
+        total_loss += batch_loss
+    
+    return total_loss
+        
+
+def train(encoder_input, decoder_target, encoder, decoder, tokenizer, loss_object, optimizer, save_best_model, deep_lstm, BATCH_SIZE, EPOCHS, PATIENCE):
+    ''' Train seq2seq model, creates a validation set and uses early stopping '''
     
     @tf.function
     def train_step(encoder_input, decoder_target):
@@ -254,7 +279,7 @@ def train(batches_per_epoch, encoder, decoder, tokenizer, loss_object, optimizer
                 
                 decoder_input = tf.expand_dims(decoder_target[:, t], 1)
             
-            # backpropegate loss for this training example
+        # backpropegate loss
         batch_loss = (loss / int(decoder_target.shape[1]))
             
         variables = encoder.trainable_variables + decoder.trainable_variables
@@ -265,6 +290,20 @@ def train(batches_per_epoch, encoder, decoder, tokenizer, loss_object, optimizer
             
         return batch_loss
     
+    encoder_input, encoder_input_val, decoder_target, decoder_target_val = train_test_split(encoder_input, decoder_target, test_size=0.05)
+    
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, decoder_target))
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    
+    val_dataset = tf.data.Dataset.from_tensor_slices((encoder_input_val, decoder_target_val))
+    val_dataset = val_dataset.batch(BATCH_SIZE, drop_remainder=True)
+    
+    batches_per_epoch = len(encoder_input) // BATCH_SIZE
+    batches_per_epoch_val = len(encoder_input_val) // BATCH_SIZE
+        
+    min_val_loss = float("inf")
+    no_improvement_counter = 0
+    
     for epoch in range(EPOCHS):
         start = time()
         
@@ -274,13 +313,31 @@ def train(batches_per_epoch, encoder, decoder, tokenizer, loss_object, optimizer
             batch_loss = train_step(encoder_input, decoder_target)
             total_loss += batch_loss
             
-            if batch % 100 == 0 or True:
-                print("Epoch %d: Batch %d: Loss %f" % (epoch + 1, batch, batch_loss.numpy()))
+            if pre.VERBOSE == 1:
+                print("Epoch %d: Batch %d: Loss %f" % (epoch + 1, batch + 1, batch_loss.numpy()))
         
-        print("Epoch %d --- %d sec: Loss %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch))
+        val_loss = calc_val_loss(batches_per_epoch_val, encoder, decoder, tokenizer, val_dataset, loss_object)
+        
+        if val_loss < min_val_loss:
+            if save_best_model:
+                print("Saving model as best val loss decreased from %f to %f" % (min_val_loss, val_loss))
+                save_seq2seq(encoder, decoder, deep_lstm)
+            no_improvement_counter = 0
+            min_val_loss = val_loss
+        else:
+            no_improvement_counter += 1
+        
+        print("Epoch %d --- %d sec: Loss %f, val_loss: %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch, val_loss / batches_per_epoch_val))
+        
+        if no_improvement_counter >= PATIENCE:
+            print("Early stopping, no improvement over minimum in %d epochs" % PATIENCE)
+            return epoch + 1
+    
+    save_seq2seq(encoder, decoder, deep_lstm)
+    return EPOCHS
             
 
-def train_seq2seq(EPOCHS, BATCH_SIZE, deep_lstm=False):
+def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
     vocab, persona_length, msg_length, reply_length = pre.get_vocab()
     tokenizer = pre.fit_tokenizer(vocab)
     vocab_size = len(tokenizer.word_index) + 1
@@ -306,11 +363,6 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, deep_lstm=False):
     encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, decoder_target))
-    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
-    
-    batches_per_epoch = len(encoder_input) // BATCH_SIZE
-    
     # load GloVe embeddings, make the embeddings for encoder and decoder tied https://www.aclweb.org/anthology/E17-2025.pdf
     embedding_matrix = pre.load_glove_embedding(tokenizer, pre.GLOVE_FN)
     embedding_matrix = Embedding(vocab_size, embedding_matrix.shape[1], weights=[embedding_matrix], trainable=True, mask_zero=True, name="tied_embedding")
@@ -326,7 +378,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, deep_lstm=False):
     # will give labels as integers instead of one hot so use sparse CCE
     loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
 
-    train(batches_per_epoch, encoder, decoder, tokenizer, loss_func, optimizer, dataset, BATCH_SIZE, movie_epochs)
+    movie_epochs = train(encoder_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, PATIENCE)
     
     print("Finished Pre-training on Cornell Movie Dataset for %d epochs" % movie_epochs)
     
@@ -336,10 +388,10 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, deep_lstm=False):
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
     # ------ ------ #
-        
+
     
     # ------ Pretrain on Daily Dialogue ------ #
-    daily_epochs = 35
+    daily_epochs = 50
     conversations = pre.load_dailydialogue_dataset()
     
     encoder_input  = conversations[:, 0]
@@ -351,12 +403,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, deep_lstm=False):
     encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, decoder_target))
-    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
-    
-    batches_per_epoch = len(encoder_input) // BATCH_SIZE
-    
-    train(batches_per_epoch, encoder, decoder, tokenizer, loss_func, optimizer, dataset, BATCH_SIZE, daily_epochs)
+    daily_epochs = train(encoder_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, PATIENCE)
     
     print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
     
@@ -383,25 +430,16 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, deep_lstm=False):
     encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, decoder_target))
-    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    epochs = train(encoder_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, PATIENCE)
     
-    batches_per_epoch = len(encoder_input) // BATCH_SIZE
-    
-    train(batches_per_epoch, encoder, decoder, tokenizer, loss_func, optimizer, dataset, BATCH_SIZE, EPOCHS)
-    
-    print("Finished Training on PERSONA-CHAT for %d epochs" % EPOCHS)
+    print("Finished Training on PERSONA-CHAT for %d epochs" % epochs)
     
     # do some dummy text generation
     for i in range(len(raw)):
         reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
-    
-    plot_attention(attn_weights[:len(reply.split(' ')), :len(raw[-1].split(' '))], raw[-1], reply)
     # ------ ------ #
-
-    save_seq2seq(encoder, decoder, deep_lstm)
 
 
 def save_seq2seq(encoder, decoder, deep_lstm):

@@ -87,7 +87,7 @@ if __name__ == '__main__':
                         help="number of consecutive epochs without improvement over validation loss minimum until training is stopped early, default = 6")
     
     parser.add_argument("--verbose", default=1, type=int,
-                        help="Display progress bar for each batch during training, default = 1")
+                        help="Display loss for each batch during training, default = 1")
     
     parser.add_argument("--glove_filename", default="glove.6B.300d.txt", type=str,
                         help="The GLoVe filename to use e.g. glove.840B.300d.txt. Will automatically prepend data path")
@@ -138,11 +138,11 @@ if __name__ == '__main__':
             
         elif args.train == model_choices[1]:
             seq2seq.train_seq2seq(
-                args.epochs, args.batch_size, deep_lstm=False)
+                args.epochs, args.batch_size, args.early_stopping_patience, deep_lstm=False)
             
         elif args.train == model_choices[2]:
             seq2seq.train_seq2seq(
-                args.epochs, args.batch_size, deep_lstm=True)
+                args.epochs, args.batch_size, args.early_stopping_patience, deep_lstm=True)
             
         elif args.train == model_choices[3]:
             pass
