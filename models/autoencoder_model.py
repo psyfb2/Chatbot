@@ -72,7 +72,6 @@ def train_autoencoder(LSTM_DIMS=512, EPOCHS=10, BATCH_SIZE=64, CLIP_NORM=5, PATI
         print("Reply:", reply + "\n")
 
 
-    
 ''' Given source sentence, generate the model inference as a target sentence '''
 def generate_reply_autoencoder(model, tokenizer, input_msg, in_seq_length):
     input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])

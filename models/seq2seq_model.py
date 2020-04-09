@@ -109,7 +109,7 @@ class Decoder(tf.keras.Model):
         decoder_output = self.out_dense1(decoder_output)
         
         return decoder_output, attn_weights, context_vec, h1, c1
-        
+
 
 class DeepEncoder(tf.keras.Model):
     ''' 4 Layer Bidirectional LSTM '''

@@ -2,7 +2,6 @@
 """
 @author: Fady Benattayallah
 """
-
 import argparse
 import os
 import text_preprocessing as pre
@@ -75,7 +74,7 @@ if __name__ == '__main__':
     
     # ----------- Train Arguments ----------- #
     parser.add_argument("--train", default=None, type=str, choices=model_choices,
-                        help="Name of the model to train")
+                        help="Name of the model to train, Note that the multiple encoders models require seq2seq to already be trained as it used their weights as a seed")
     
     parser.add_argument("--batch_size", default=64, type=int,
                         help="Batch size for training, default = 64")
@@ -83,8 +82,8 @@ if __name__ == '__main__':
     parser.add_argument("--epochs", default=100, type=int,
                         help="epochs for training on PERSONA-CHAT dataset, default = 100")
     
-    parser.add_argument("--early_stopping_patience", default=6, type=int,
-                        help="number of consecutive epochs without improvement over validation loss minimum until training is stopped early, default = 6")
+    parser.add_argument("--early_stopping_patience", default=15, type=int,
+                        help="number of consecutive epochs without improvement over validation loss minimum until training is stopped early, default = 15")
     
     parser.add_argument("--verbose", default=1, type=int,
                         help="Display loss for each batch during training, default = 1")
@@ -145,12 +144,12 @@ if __name__ == '__main__':
                 args.epochs, args.batch_size, args.early_stopping_patience, deep_lstm=True)
             
         elif args.train == model_choices[3]:
-            pass
+            multenc.train_multiple_encoders(args.epochs, args.batch_size, args.early_stopping_patience, deep_lstm=False)
         
         elif args.train == model_choices[4]:
-            pass
+            multenc.train_multiple_encoders(args.epochs, args.batch_size, args.early_stopping_patience, deep_lstm=True)
         
-        elif args.train == model_choices[3]:
+        elif args.train == model_choices[5]:
             pass
     
     if args.eval != None:
@@ -161,6 +160,10 @@ if __name__ == '__main__':
         elif args.eval == model_choices[2]:
             pass
         elif args.eval == model_choices[3]:
+            pass
+        elif args.eval == model_choices[4]:
+            pass
+        elif args.eval == model_choices[5]:
             pass
 
     if args.talk != None:
@@ -182,6 +185,12 @@ if __name__ == '__main__':
             decoder_model = tf.saved_model.load(pre.SEQ2SEQ_DECODER_DEEP_MODEL_FN)
         
         elif args.talk == model_choices[3]:
+            pass
+        
+        elif args.eval == model_choices[4]:
+            pass
+        
+        elif args.eval == model_choices[5]:
             pass
         
         persona, _ = pre.load_dataset(pre.TRAIN_FN)

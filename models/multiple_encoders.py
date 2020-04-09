@@ -309,21 +309,22 @@ def loss_function(label, pred, loss_object):
     mask = tf.cast(mask, dtype=loss_.dtype)
     loss_ *= mask
     
-    return tf.reduce_mean(loss_)
+    return tf.reduce_mean(loss_)            
 
 def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, loss_object):
     total_loss = 0
     
-    for (batch, (encoder_input, decoder_target)) in enumerate(val_dataset.take(batches_per_epoch)):
+    for (batch, (persona, msg, decoder_target)) in enumerate(val_dataset.take(batches_per_epoch)):
         loss = 0
         
-        encoder_persona_outputs, encoder_msg_outputs, *initial_state = encoder(encoder_input)
+        encoder_persona_states, encoder_msg_states, *initial_state = encoder([persona, msg])
         
-        decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_input.shape[0], 1)
-        context_vec = tf.zeros((encoder_outputs.shape[0], encoder_outputs.shape[-1]))
+        decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_persona_states.shape[0], 1)
+        context_vec_concat = tf.zeros(
+                (encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states[-1]))
     
         for t in range(1, decoder_target.shape[1]):
-            predictions, _, context_vec, *initial_state = decoder([decoder_input, encoder_outputs, context_vec, initial_state])
+            predictions, _, _, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, initial_state])
             
             loss += loss_function(decoder_target[:, t], predictions, loss_object)
             
@@ -339,23 +340,25 @@ def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, dec
     ''' Train seq2seq model, creates a validation set and uses early stopping '''
     
     @tf.function
-    def train_step(encoder_input, decoder_target):
+    def train_step(persona, msg, decoder_target):
         '''
         Perform training on a single batch
-        encoder_input shape  => (batch_size, in_seq_length)
+        persona  => (batch_size, persona_length)
+        msg => (batch_size, msg_length)
         decoder_target shape => (batch_size, out_seq_length)
         '''
         loss = 0
         
         with tf.GradientTape() as tape:
-            encoder_outputs, *initial_state = encoder(encoder_input)
+            encoder_persona_states, encoder_msg_states, *initial_state = encoder([persona, msg])
             
             decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * BATCH_SIZE, 1)
-            context_vec = tf.zeros((encoder_outputs.shape[0], encoder_outputs.shape[-1]))
+            context_vec_concat = tf.zeros(
+                (encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states[-1]))
             
             # Teacher forcing, ground truth for previous word input to the decoder at current timestep
             for t in range(1, decoder_target.shape[1]):
-                predictions, _, context_vec, *initial_state = decoder([decoder_input, encoder_outputs, context_vec, initial_state])
+                predictions, _, _, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, initial_state])
                 
                 loss += loss_function(decoder_target[:, t], predictions, loss_object)
                 
@@ -372,16 +375,19 @@ def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, dec
             
         return batch_loss
     
-    encoder_input, encoder_input_val, decoder_target, decoder_target_val = train_test_split(encoder_input, decoder_target, test_size=0.05)
+    breakpoint() ##########
     
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, decoder_target))
+    encoder_persona_input, encoder_persona_input_val, encoder_msg_input, encoder_msg_input_val, decoder_target, decoder_target_val = train_test_split(
+        encoder_persona_input, encoder_msg_input, decoder_target, test_size=0.05)
+    
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
     dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
     
-    val_dataset = tf.data.Dataset.from_tensor_slices((encoder_input_val, decoder_target_val))
+    val_dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input_val, encoder_msg_input_val,  decoder_target_val))
     val_dataset = val_dataset.batch(BATCH_SIZE, drop_remainder=True)
     
-    batches_per_epoch = len(encoder_input) // BATCH_SIZE
-    batches_per_epoch_val = len(encoder_input_val) // BATCH_SIZE
+    batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
+    batches_per_epoch_val = len(encoder_persona_input_val) // BATCH_SIZE
         
     min_val_loss = float("inf")
     no_improvement_counter = 0
@@ -391,8 +397,8 @@ def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, dec
         
         total_loss = 0
         
-        for (batch, (encoder_input, decoder_target)) in enumerate(dataset.take(batches_per_epoch)):
-            batch_loss = train_step(encoder_input, decoder_target)
+        for (batch, (persona, msg, decoder_target)) in enumerate(dataset.take(batches_per_epoch)):
+            batch_loss = train_step(persona, msg, decoder_target)
             total_loss += batch_loss
             
             if pre.VERBOSE == 1:
@@ -417,121 +423,76 @@ def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, dec
     
     save_seq2seq(encoder, decoder, deep_lstm)
     return EPOCHS
+
+def seed_weights(seq2seq_encoder, seq2seq_decoder, multple_encoder, multiple_decoder, deep_lstm):
+    ''' Seed weights of multiple encoder model with the weights of a previously trained sequence to sequence model '''
+    pass
             
 
-def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
+def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
     vocab, persona_length, msg_length, reply_length = pre.get_vocab()
     tokenizer = pre.fit_tokenizer(vocab)
     vocab_size = len(tokenizer.word_index) + 1
     vocab = None
-    
-    in_seq_length = persona_length + msg_length
+
     out_seq_length = reply_length
     
     print('Vocab size: %d' % vocab_size)
-    print('Input sequence length: %d' % in_seq_length)
+    print('Persona sequence length: %d' % persona_length)
+    print('Message sequence length: %d' % msg_length)
     print('Output sequence length: %d' % out_seq_length)
     
-    # ------ Pretrain on Movie dataset ------ #
-    movie_epochs = 10
-    movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)[:50] ######
-    
-    encoder_input  = movie_conversations[:, 0]
-    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
-    
-    raw = encoder_input[:20]
-
-    # integer encode training data
-    encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
-    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
-    
-    # load GloVe embeddings, make the embeddings for encoder and decoder tied https://www.aclweb.org/anthology/E17-2025.pdf
     embedding_matrix = pre.load_glove_embedding(tokenizer, pre.GLOVE_FN)
     embedding_matrix = Embedding(vocab_size, embedding_matrix.shape[1], weights=[embedding_matrix], trainable=True, mask_zero=True, name="tied_embedding")
-
+    
     if deep_lstm:
-        encoder = DeepEncoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
-        decoder = DeepDecoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
+        seq2seq_encoder = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_DEEP_MODEL_FN)
+        seq2seq_decoder = tf.saved_model.load(pre.SEQ2SEQ_DECODER_DEEP_MODEL_FN)
+        
+        encoder = DeepMultipleEncoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
+        decoder = DeepMultipleDecoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
     else:
-        encoder = Encoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
-        decoder = Decoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
+        seq2seq_encoder = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_MODEL_FN)
+        seq2seq_decoder = tf.saved_model.load(pre.SEQ2SEQ_DECODER_MODEL_FN)
+        
+        encoder = MultipleEncoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
+        decoder = MultipleDecoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
     
-    optimizer = Adam(clipnorm=CLIP_NORM)
-    # will give labels as integers instead of one hot so use sparse CCE
-    loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
-
-    movie_epochs = train(encoder_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, PATIENCE)
-    
-    print("Finished Pre-training on Cornell Movie Dataset for %d epochs" % movie_epochs)
-    
-    # do some dummy text generation
-    for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
-        print("Message:", raw[i])
-        print("Reply:", reply + "\n")
-    # ------ ------ #
-
-    
-    # ------ Pretrain on Daily Dialogue ------ #
-    daily_epochs = 10
-    conversations = pre.load_dailydialogue_dataset()[:50]
-    
-    encoder_input  = conversations[:, 0]
-    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
-    
-    raw = encoder_input[:20]
-    
-    # integer encode training data
-    encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
-    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
-    
-    daily_epochs = train(encoder_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, PATIENCE)
-    
-    print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
-    
-    # do some dummy text generation
-    for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
-        print("Message:", raw[i])
-        print("Reply:", reply + "\n")
-    # ------ ------ #
-    
+    # seed the weights of this model with previously trained seq2seq model
+    seed_weights(seq2seq_encoder, seq2seq_decoder, encoder, decoder, deep_lstm)
     
     # ------ Train on PERSONA-CHAT ------ #
     train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
-    train_data = train_data[:50]
     
     # train is a numpy array containing triples [message, reply, persona_index]
     # personas is an numpy array of strings for the personas
     
-    encoder_input  = np.array([train_personas[int(row[2])] + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in train_data])
+    encoder_persona_input  = np.array([train_personas[int(row[2])] for row in train_data])
+    encoder_msg_input = train_data[:, 0]
     decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in train_data])
     
-    raw = encoder_input[:20]
+    train_data, train_personas = None, None
+    
+    persona_raw = encoder_persona_input[:20]
+    msg_raw = encoder_msg_input[:20]
     
     # integer encode training data
-    encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
+    encoder_persona_input  = pre.encode_sequences(tokenizer, persona_length, encoder_persona_input)
+    encoder_msg_input = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
-    epochs = train(encoder_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, PATIENCE)
+    optimizer = Adam(clipnorm=CLIP_NORM)
+    loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
+    
+    epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, PATIENCE)
     
     print("Finished Training on PERSONA-CHAT for %d epochs" % epochs)
     
     # do some dummy text generation
-    for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
-        print("Message:", raw[i])
-        print("Reply:", reply + "\n")
-    
-    plot_attention(attn_weights[:len(reply.split(' ')), :len(raw[-1].split(' '))], raw[-1], reply)
-    
-    encoder = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_MODEL_FN)
-    decoder = tf.saved_model.load(pre.SEQ2SEQ_DECODER_MODEL_FN)
-    
-    # do some dummy text generation
-    for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
-        print("Message:", raw[i])
+    for i in range(len(persona_raw)):
+        reply, persona_attn_weights, msg_attn_weights = generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona_raw[i], msg_raw[i], persona_length, msg_length, out_seq_length)
+        print("Persona:", persona_raw[i])
+        print("Message:", msg_raw[i])
         print("Reply:", reply + "\n")
     # ------ ------ #
 
@@ -553,14 +514,17 @@ def save_seq2seq(encoder, decoder, deep_lstm):
             tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='c1')]
         
     tf.saved_model.save(encoder, encoder_fn , signatures=encoder.call.get_concrete_function(
-        tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='input_utterence')
-        ))
+        [
+            tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='persona'),
+            tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='message')
+        ]))
     
     tf.saved_model.save(decoder, decoder_fn, signatures=decoder.call.get_concrete_function(
         [
             tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='input_word'), 
-            tf.TensorSpec(shape=[None, None, LSTM_DIM * 2], dtype=tf.float32, name="encoder_output"),
-            tf.TensorSpec(shape=[None, LSTM_DIM * 2], dtype=tf.float32, name="context_vec"),
+            tf.TensorSpec(shape=[None, None, LSTM_DIM * 2], dtype=tf.float32, name="encoder_persona_states"),
+            tf.TensorSpec(shape=[None, None, LSTM_DIM * 2], dtype=tf.float32, name="encoder_msg_states"),
+            tf.TensorSpec(shape=[None, LSTM_DIM * 4], dtype=tf.float32, name="context_vec_concat"),
             decoder_states_spec
         ]))
     
@@ -581,27 +545,34 @@ def plot_attention(attn_weights, message, reply):
 
     plt.show()
 
-def generate_reply_seq2seq(encoder, decoder, tokenizer, input_msg, in_seq_length, out_seq_length):
+def generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona, msg, persona_length, msg_length, out_seq_length):
     '''
-    Generates a reply for a trained sequence to sequence model using greedy search 
+    Generates a reply for a trained multiple encoder sequence to sequence model using greedy search 
     '''
+    persona = pre.encode_sequences(tokenizer, persona_length, [persona])
+    persona = tf.convert_to_tensor(persona)
     
-    input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
-    input_seq = tf.convert_to_tensor(input_seq)
+    msg = pre.encode_sequences(tokenizer, persona_length, [msg])
+    msg = tf.convert_to_tensor(msg)
     
-    attn_weights = np.zeros((out_seq_length, in_seq_length))
+    persona_attn_weights = np.zeros((out_seq_length, persona_length))
+    msg_attn_weights = np.zeros((out_seq_length, msg_length))
     
-    encoder_out, *initial_state = encoder(input_seq)
+    encoder_persona_states, encoder_msg_states, *initial_state = encoder([persona, msg])
     
     decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]], 0)
-    context_vec = tf.zeros((encoder_out.shape[0], encoder_out.shape[-1]))
+    context_vec_concat = tf.zeros(
+                (encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states[-1]))
     
     reply = []
     for t in range(out_seq_length):
-        softmax_layer, attn_score, context_vec, *initial_state = decoder([decoder_input, encoder_out, context_vec, initial_state])
+        softmax_layer, persona_attn_score, msg_attn_score, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, initial_state])
         
-        attn_score = tf.reshape(attn_score, (-1,))
-        attn_weights[t] = attn_score.numpy()
+        persona_attn_score = tf.reshape(persona_attn_score, (-1,))
+        persona_attn_weights[t] = persona_attn_score.numpy()
+        
+        msg_attn_score = tf.reshape(msg_attn_score, (-1,))
+        msg_attn_weights[t] = msg_attn_score.numpy()
         
         # get predicted word by looking at highest node in output softmax layer
         word_index = tf.argmax(softmax_layer[0]).numpy()
@@ -614,122 +585,4 @@ def generate_reply_seq2seq(encoder, decoder, tokenizer, input_msg, in_seq_length
         
         decoder_input = tf.expand_dims([word_index], 0)
     
-    return " ".join(reply), attn_weights
-
-
-def beam_search_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_seq_length, out_seq_length, beam_length = 3):
-    ''' Generates a reply for a trained sequence to sequence model using beam search '''
-    
-    '''
-    No built in implementation of beam search for keras models so build our own, works by
-    1. find beam length most likely next words for each of previous beam length
-       network fragments
-       
-    2. find most likely beam length words from (beam length * vocab_size) possibilities
-       using summed log likelihood probability
-    
-    3. save hidden state, ascociated output tokens and current probability
-       for each most likely beam length token
-    
-    4. if the output token is EOS or out_seq_length reached make this beam a dead end
-    
-    5. repeat until all beams are dead ends
-    
-    6. pick most likely beam lenght sequences according to length normalized
-       log likelihood objective function
-    '''
-    
-    input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
-    input_seq = tf.convert_to_tensor(input_seq)
-    
-    encoder_out, *initial_state = encoder_model(input_seq)
-    
-    context_vec = tf.zeros((encoder_out.shape[0], encoder_out.shape[-1]))
-    
-    # beams will store [ [probability, states, context_vec, word1, word2, ...], ... ]
-    beams = [ [0.0, initial_state, context_vec, pre.START_SEQ_TOKEN] for i in range(beam_length)]
-    
-    prob = 0
-    initial_state = 1
-    context_vec = 2
-    
-    # store beam length ^ 2 most likely words [ [probability, word_index, beam_index], ... ]
-    most_likely_words_all = [[0.0, 0, 0] for i in range(beam_length * beam_length)]
-    
-    beam_finished = lambda b : b[-1] == pre.END_SEQ_TOKEN or len(b) - context_vec - 1 >= out_seq_length
-    while not reduce(lambda a, b : a and b , map(beam_finished, beams)):
-    
-        # find beam length most likely words out of all beams (vocab_size * beam length possibilities)
-        for b_index in range(len(beams)):
-            b = beams[b_index]
-            prev_word = b[-1]
-            
-            if prev_word == pre.END_SEQ_TOKEN:
-                # dead end beam so don't generate a new token, update states 
-                # and leave most_likely_words for this beam constant
-                continue
-            
-            decoder_input = tf.expand_dims([tokenizer.word_index[prev_word]], 0)
-            out_softmax_layer, _, b[context_vec], *b[initial_state] = decoder_model([decoder_input, encoder_out, b[context_vec], b[initial_state]])
-            
-            # store beam length most likely words and there probabilities for this beam
-            out_softmax_layer = tf.nn.softmax(out_softmax_layer[0]).numpy()
-            most_likely_indicies = out_softmax_layer.argsort()[-beam_length:][::-1]
-            
-            i_ = 0
-            for i in range(beam_length * b_index, beam_length * (b_index + 1) ):
-                # summed log likelihood probability
-                most_likely_words_all[i][0] = b[prob] + log(
-                    out_softmax_layer[most_likely_indicies[i_]]) 
-                
-                # word_index in tokenizer
-                most_likely_words_all[i][1] = most_likely_indicies[i_]
-                
-                # beam index
-                most_likely_words_all[i][2] = b_index
-                i_ += 1
-            
-        if prev_word == pre.START_SEQ_TOKEN:
-            # on first run of beam search choose beam length most likely unique words
-            # as this will prevent simply running greedy search beam length times
-            most_likely_words = most_likely_words_all[:beam_length]
-        else:
-            # chose beam length most likely words out of beam length ^ 2 possible words
-            # by their length normalized log likelihood probabilities descending
-            # using a beam penalty of 1.0
-            most_likely_words = sorted(
-                most_likely_words_all, key = lambda l:l[0] / (len(beams[l[2]]) - context_vec - 1), reverse=True)[:beam_length]
-        
-            # most_likely_words must remain constant for dead end beams
-            # so make sure index in most_likely_words == b_index for dead end beams
-            for i in range(len(most_likely_words)):
-                if beams[most_likely_words[i][2]][-1] == pre.END_SEQ_TOKEN and i != most_likely_words[i][2]:
-                    # swap index of dead end in beams with i in most_likely_words
-                    temp = most_likely_words[i]
-                    most_likely_words[i] = most_likely_words[most_likely_words[i][2]]
-                    most_likely_words[most_likely_words[i][2]] = temp
-                    
-            
-        # save network fragments for the most likely words
-        temp_beams = [[] for i in range(beam_length)]
-        for i in range(len(most_likely_words)):
-            old_beam = copy(beams[most_likely_words[i][2]])
-            old_beam[prob] = most_likely_words[i][0]
-            
-            # prevent EOS token being continually appended for dead end beams
-            if old_beam[-1] != pre.END_SEQ_TOKEN:
-                old_beam.append(pre.index_to_word(most_likely_words[i][1], tokenizer))
-            
-            # beam state was already saved in the first step
-            
-            temp_beams[i] = old_beam
-            
-        beams = temp_beams
-    
-    # sort beams by length normalized log likelihood descending and only keep text
-    replys = [" ".join(b[context_vec + 2:-1]) 
-              for b in sorted(beams, key = lambda b:b[0] / (len(b) - context_vec - 1), reverse=True)]
-    
-    # return list of beam length reply's from most likely to least likely
-    return replys
-    
+    return " ".join(reply), persona_attn_weights, msg_attn_weights
