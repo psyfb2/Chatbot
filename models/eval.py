@@ -74,7 +74,7 @@ if __name__ == '__main__':
     
     # ----------- Train Arguments ----------- #
     parser.add_argument("--train", default=None, type=str, choices=model_choices,
-                        help="Name of the model to train, Note that the multiple encoders models require seq2seq to already be trained as it used their weights as a seed")
+                        help="Name of the model to train")
     
     parser.add_argument("--batch_size", default=64, type=int,
                         help="Batch size for training, default = 64")
@@ -84,6 +84,9 @@ if __name__ == '__main__':
     
     parser.add_argument("--early_stopping_patience", default=15, type=int,
                         help="number of consecutive epochs without improvement over validation loss minimum until training is stopped early, default = 15")
+    
+    parser.add_argument("--segment_embedding", default=True, type=str2bool,
+                        help="Whether or not to add an additional segment embedding to seq2seq models so that it can better distiguish persona from message. Only applies to seq2seq and deep_seq2seq, default = True")
     
     parser.add_argument("--verbose", default=1, type=int,
                         help="Display loss for each batch during training, default = 1")

@@ -5,14 +5,9 @@
 import numpy as np
 import text_preprocessing as pre
 import tensorflow as tf
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 from time import time
-from math import log
-from copy import copy
-from functools import reduce
 from tensorflow.keras.losses import SparseCategoricalCrossentropy
-from tensorflow.keras.layers import LSTM, Dense, Embedding, Bidirectional, Dropout
+from tensorflow.keras.layers import GRU, Dense, Embedding, Bidirectional, Dropout
 from tensorflow.keras.optimizers import Adam
 from sklearn.model_selection import train_test_split
 
@@ -22,8 +17,8 @@ DROPOUT = 0.2
 
 class MultipleEncoder(tf.keras.Model):
     ''' 
-        1 Layer Bidirectional LSTM for each of persona and message encoder
-        there hidden states are added together and can be passed to the decoder
+        1 Layer Bidirectional GRU for each of persona and message encoder
+        their hidden states are combined together and can be passed to the decoder
     '''
     def __init__(self, vocab_size, embedding, n_units, batch_size):
         super(MultipleEncoder, self).__init__()
@@ -32,11 +27,14 @@ class MultipleEncoder(tf.keras.Model):
         
         self.embedding = embedding
         
-        self.persona_lstm1 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_persona_lstm1"), name="enc_persona_lstm1_bi")
+        self.persona_gru1 = Bidirectional(
+            GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_persona_gru1"), name="enc_persona_gru1_bi")
         
-        self.msg_lstm1 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_msg_lstm1"), name="enc_msg_lstm1_bi")
+        self.msg_gru1 = Bidirectional(
+            GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_msg_lstm1"), name="enc_msg_gru1_bi")
+        
+        self.h1_dense = Dense(n_units, activation="tanh")
+    
     @tf.function
     def call(self, inputs):
         '''
@@ -47,14 +45,14 @@ class MultipleEncoder(tf.keras.Model):
         persona_embed = self.embedding(persona)
         msg_embed = self.embedding(msg)
         
-        encoder_persona_states, persona_h1, persona_c1, _, _ = self.persona_lstm1(persona_embed)
-        encoder_msg_states, msg_h1, msg_c1, _, _ = self.msg_lstm1(msg_embed)
+        encoder_persona_states, persona_h1, _ = self.persona_gru1(persona_embed)
+        encoder_msg_states, msg_h1, _ = self.msg_gru1(msg_embed)
         
         # add the hidden states of the persona and message encoder
-        h1 = tf.math.add(persona_h1, msg_h1)
-        c1 = tf.math.add(persona_c1, msg_c1)
+        h1 = tf.concat([persona_h1, msg_h1], axis=-1)
+        h1 = self.h1_dense(h1)
         
-        return encoder_persona_states, encoder_msg_states, h1, c1
+        return encoder_persona_states, encoder_msg_states, h1
 
 
 class MultipleDecoder(tf.keras.Model):
@@ -66,7 +64,7 @@ class MultipleDecoder(tf.keras.Model):
         
         self.embedding = embedding
         
-        self.lstm1 = LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_lstm1")
+        self.gru1 = GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_gru1")
         
         # attention
         # Ct(s) = V tanh(W1 hs + W2 ht)
@@ -86,18 +84,18 @@ class MultipleDecoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs => [input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, [h1, c1]]
-        returns => decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1, c1
+        inputs => [input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, [h1]]
+        returns => decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1
         '''
         input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, hidden = inputs
-        h1, c1 = hidden
+        h1 = hidden
         
         input_embed = self.embedding(input_word)
         
-        # feed previous context vector as input into LSTM at current timestep
-        input_embed = tf.concat([tf.expand_dims(context_vec_concat, 1), input_embed], axis=-1)
+        # feed previous context vector as input into GRU at current timestep
+        input_embed = tf.concat([input_embed, tf.expand_dims(context_vec_concat, 1)], axis=-1)
         
-        decoder_output, h1, c1 = self.lstm1(input_embed, initial_state=[h1, c1])
+        decoder_output, h1 = self.gru1(input_embed, initial_state=h1)
         
         # => (batch_size, 1, n_units)
         decoder_state = tf.expand_dims(h1, 1)
@@ -137,10 +135,10 @@ class MultipleDecoder(tf.keras.Model):
         # => (batch_size, n_units * 5)
         decoder_output = tf.concat([decoder_output, context_vec_concat], axis=-1)
         
-        decoder_output = Dropout(DROPOUT)(decoder_output )
+        decoder_output = Dropout(DROPOUT)(decoder_output)
         decoder_output = self.out_dense1(decoder_output)
         
-        return decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1, c1
+        return decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1
         
 class DeepMultipleEncoder(tf.keras.Model):
     ''' 
@@ -154,58 +152,61 @@ class DeepMultipleEncoder(tf.keras.Model):
         
         self.embedding = embedding
         
-        self.persona_lstm1 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_persona_lstm1"), name="enc_persona_lstm1_bi")
-        self.persona_lstm2 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_persona_lstm2"), name="enc_persona_lstm2_bi")
-        self.persona_lstm3 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_persona_lstm3"), name="enc_persona_lstm3_bi")
-        self.persona_lstm4 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_persona_lstm4"), name="enc_persona_lstm4_bi")
+        self.persona_gru1 = Bidirectional(
+            GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_persona_gru1"), name="enc_persona_gru1_bi")
+        self.persona_gru2 = Bidirectional(
+            GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_persona_gru2"), name="enc_persona_gru2_bi")
+        self.persona_gru3 = Bidirectional(
+            GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_persona_gru3"), name="enc_persona_gru3_bi")
+        self.persona_gru4 = Bidirectional(
+            GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_persona_gru4"), name="enc_persona_gru4_bi")
         
-        self.msg_lstm1 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_msg_lstm1"), name="enc_msg_lstm1_bi")
-        self.msg_lstm2 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_msg_lstm2"), name="enc_msg_lstm2_bi")
-        self.msg_lstm3 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_msg_lstm3"), name="enc_msg_lstm3_bi")
-        self.msg_lstm4 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_msg_lstm4"), name="enc_msg_lstm4_bi")
+        self.msg_gru1 = Bidirectional(
+            GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_msg_gru1"), name="enc_msg_gru1_bi")
+        self.msg_gru2 = Bidirectional(
+            GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_msg_gru2"), name="enc_msg_gru2_bi")
+        self.msg_gru3 = Bidirectional(
+            GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_msg_gru3"), name="enc_msg_gru3_bi")
+        self.msg_gru4 = Bidirectional(
+            GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_msg_gru4"), name="enc_msg_gru4_bi")
+        
+        self.h1_dense = Dense(n_units, activation="tanh")
+        self.h2_dense = Dense(n_units, activation="tanh")
+        self.h3_dense = Dense(n_units, activation="tanh")
+        self.h4_dense = Dense(n_units, activation="tanh")
         
     @tf.function
     def call(self, inputs):
         '''
         inputs => [persona, msg]
-        returns: encoder_persona_states, encoder_msg_states, h1, c1, h2, c2, h3, c3, h4, c4
+        returns: encoder_persona_states, encoder_msg_states, h1, h2, h3, h4
         '''
         persona, msg = inputs[0], inputs[1]
         persona_embed = self.embedding(persona)
         msg_embed = self.embedding(msg)
         
-        encoder_persona_states, persona_h1, persona_c1, _, _ = self.persona_lstm1(persona_embed)
-        encoder_persona_states, persona_h2, persona_c2, _, _ = self.persona_lstm2(encoder_persona_states)
-        encoder_persona_states, persona_h3, persona_c3, _, _ = self.persona_lstm3(encoder_persona_states)
-        encoder_persona_states, persona_h4, persona_c4, _, _ = self.persona_lstm4(encoder_persona_states)
+        encoder_persona_states, persona_h1, _ = self.persona_gru1(persona_embed)
+        encoder_persona_states, persona_h2, _ = self.persona_gru2(encoder_persona_states)
+        encoder_persona_states, persona_h3, _ = self.persona_gru3(encoder_persona_states)
+        encoder_persona_states, persona_h4, _ = self.persona_gru4(encoder_persona_states)
         
-        encoder_msg_states, msg_h1, msg_c1, _, _ = self.msg_lstm1(msg_embed)
-        encoder_msg_states, msg_h2, msg_c2, _, _ = self.msg_lstm2(encoder_msg_states)
-        encoder_msg_states, msg_h3, msg_c3, _, _ = self.msg_lstm3(encoder_msg_states)
-        encoder_msg_states, msg_h4, msg_c4, _, _ = self.msg_lstm4(encoder_msg_states)
+        encoder_msg_states, msg_h1, _ = self.msg_gru1(msg_embed)
+        encoder_msg_states, msg_h2, _ = self.msg_gru2(encoder_msg_states)
+        encoder_msg_states, msg_h3, _ = self.msg_gru3(encoder_msg_states)
+        encoder_msg_states, msg_h4, _ = self.msg_gru4(encoder_msg_states)
         
-        # add the hidden states of the persona and message encoder
-        h1 = tf.math.add(persona_h1, msg_h1)
-        c1 = tf.math.add(persona_c1, msg_c1)
+        # concat the hidden states of the persona and message encoder
+        h1 = tf.concat([persona_h1, msg_h1], axis=-1)
+        h2 = tf.concat([persona_h2, msg_h2], axis=-1)
+        h3 = tf.concat([persona_h3, msg_h3], axis=-1)
+        h4 = tf.concat([persona_h4, msg_h4], axis=-1)
         
-        h2 = tf.math.add(persona_h2, msg_h2)
-        c2 = tf.math.add(persona_c2, msg_c2)
+        h1 = self.h1_dense(h1)
+        h2 = self.h2_dense(h2)
+        h3 = self.h3_dense(h3)
+        h4 = self.h4_dense(h4)
         
-        h3 = tf.math.add(persona_h3, msg_h3)
-        c3 = tf.math.add(persona_c3, msg_c3)
-        
-        h4 = tf.math.add(persona_h4, msg_h4)
-        c4 = tf.math.add(persona_c4, msg_c4)
-        
-        return encoder_persona_states, encoder_msg_states, h1, c1, h2, c2, h3, c3, h4, c4
+        return encoder_persona_states, encoder_msg_states, h1, h2, h3, h4
 
 
 class DeepMultipleDecoder(tf.keras.Model):
@@ -217,10 +218,10 @@ class DeepMultipleDecoder(tf.keras.Model):
         
         self.embedding = embedding
         
-        self.lstm1 = LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_lstm1")
-        self.lstm2 = LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_lstm2")
-        self.lstm3 = LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_lstm3")
-        self.lstm4 = LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_lstm4")
+        self.gru1 = GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_gru1")
+        self.gru2 = GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_gru2")
+        self.gru3 = GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_gru3")
+        self.gru4 = GRU(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="dec_gru4")
         
         # attention
         # Ct(s) = V tanh(W1 hs + W2 ht)
@@ -240,21 +241,21 @@ class DeepMultipleDecoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs => [input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, [h1, c1, h2, c2, h3, c3, h4, c4]]
-        returns => decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1, c1, h2, c2, h3, c3, h4, c4
+        inputs => [input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, [h1, h2, h3, h4]
+        returns => decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1, h2, h3, h4
         '''
         input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, hidden = inputs
-        h1, c1, h2, c2, h3, c3, h4, c4 = hidden
+        h1, h2, h3, h4 = hidden
         
         input_embed = self.embedding(input_word)
         
-        # feed previous context vector as input into LSTM at current timestep
-        input_embed = tf.concat([tf.expand_dims(context_vec_concat, 1), input_embed], axis=-1)
+        # feed previous context vector as input into GRU at current timestep
+        input_embed = tf.concat([input_embed, tf.expand_dims(context_vec_concat, 1)], axis=-1)
         
-        decoder_output, h1, c1 = self.lstm1(input_embed, initial_state=[h1, c1])
-        decoder_output, h2, c2 = self.lstm2(decoder_output, initial_state=[h2, c2])
-        decoder_output, h3, c3 = self.lstm3(decoder_output, initial_state=[h3, c3])
-        decoder_output, h4, c4 = self.lstm4(decoder_output, initial_state=[h4, c4])
+        decoder_output, h1 = self.gru1(input_embed, initial_state=h1)
+        decoder_output, h2 = self.gru2(decoder_output, initial_state=h2)
+        decoder_output, h3 = self.gru3(decoder_output, initial_state=h3)
+        decoder_output, h4 = self.gru4(decoder_output, initial_state=h4)
         
         # => (batch_size, 1, n_units)
         decoder_state = tf.expand_dims(h4, 1)
@@ -297,7 +298,7 @@ class DeepMultipleDecoder(tf.keras.Model):
         decoder_output = Dropout(DROPOUT)(decoder_output )
         decoder_output = self.out_dense1(decoder_output)
         
-        return decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1, c1, h2, c2, h3, c3, h4, c4
+        return decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1, h2, h3, h4
     
 def loss_function(label, pred, loss_object):
     '''
@@ -320,8 +321,7 @@ def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, l
         encoder_persona_states, encoder_msg_states, *initial_state = encoder([persona, msg])
         
         decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_persona_states.shape[0], 1)
-        context_vec_concat = tf.zeros(
-                (encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states[-1]))
+        context_vec_concat = tf.zeros((encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states.shape[-1]))
     
         for t in range(1, decoder_target.shape[1]):
             predictions, _, _, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, initial_state])
@@ -348,13 +348,12 @@ def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, dec
         decoder_target shape => (batch_size, out_seq_length)
         '''
         loss = 0
-        
+
         with tf.GradientTape() as tape:
             encoder_persona_states, encoder_msg_states, *initial_state = encoder([persona, msg])
             
             decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * BATCH_SIZE, 1)
-            context_vec_concat = tf.zeros(
-                (encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states[-1]))
+            context_vec_concat = tf.zeros((encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states.shape[-1]))
             
             # Teacher forcing, ground truth for previous word input to the decoder at current timestep
             for t in range(1, decoder_target.shape[1]):
@@ -375,10 +374,8 @@ def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, dec
             
         return batch_loss
     
-    breakpoint() ##########
-    
     encoder_persona_input, encoder_persona_input_val, encoder_msg_input, encoder_msg_input_val, decoder_target, decoder_target_val = train_test_split(
-        encoder_persona_input, encoder_msg_input, decoder_target, test_size=0.05)
+        encoder_persona_input, encoder_msg_input, decoder_target, test_size=0.05, shuffle=False)
     
     dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
     dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
@@ -402,7 +399,7 @@ def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, dec
             total_loss += batch_loss
             
             if pre.VERBOSE == 1:
-                print("Epoch %d: Batch %d: Loss %f" % (epoch + 1, batch + 1, batch_loss.numpy()))
+                print("Epoch %d: Batch %d / %d: Loss %f" % (epoch + 1, batch + 1, batches_per_epoch, batch_loss.numpy()))
         
         val_loss = calc_val_loss(batches_per_epoch_val, encoder, decoder, tokenizer, val_dataset, loss_object)
         
@@ -422,12 +419,7 @@ def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, dec
             return epoch + 1
     
     save_seq2seq(encoder, decoder, deep_lstm)
-    return EPOCHS
-
-def seed_weights(seq2seq_encoder, seq2seq_decoder, multple_encoder, multiple_decoder, deep_lstm):
-    ''' Seed weights of multiple encoder model with the weights of a previously trained sequence to sequence model '''
-    pass
-            
+    return EPOCHS            
 
 def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
     vocab, persona_length, msg_length, reply_length = pre.get_vocab()
@@ -445,24 +437,78 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
     embedding_matrix = pre.load_glove_embedding(tokenizer, pre.GLOVE_FN)
     embedding_matrix = Embedding(vocab_size, embedding_matrix.shape[1], weights=[embedding_matrix], trainable=True, mask_zero=True, name="tied_embedding")
     
-    if deep_lstm:
-        seq2seq_encoder = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_DEEP_MODEL_FN)
-        seq2seq_decoder = tf.saved_model.load(pre.SEQ2SEQ_DECODER_DEEP_MODEL_FN)
-        
+    if deep_lstm:        
         encoder = DeepMultipleEncoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
         decoder = DeepMultipleDecoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
-    else:
-        seq2seq_encoder = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_MODEL_FN)
-        seq2seq_decoder = tf.saved_model.load(pre.SEQ2SEQ_DECODER_MODEL_FN)
-        
+    else:        
         encoder = MultipleEncoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
         decoder = MultipleDecoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
     
-    # seed the weights of this model with previously trained seq2seq model
-    seed_weights(seq2seq_encoder, seq2seq_decoder, encoder, decoder, deep_lstm)
+    # ------ Pretrain on Movie dataset ------ #
+    movie_epochs = 25
+    movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
+
+    encoder_msg_input  = movie_conversations[:, 0]
+    encoder_persona_input = np.array(["" for _ in encoder_msg_input])
+    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
+
+    movie_conversations = None
+    
+    msg_raw = encoder_msg_input[:20]
+    persona_raw = encoder_persona_input[:20]
+    
+    # integer encode training data
+    encoder_persona_input = pre.encode_sequences(tokenizer, persona_length, encoder_persona_input)
+    encoder_msg_input  = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
+    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
+    
+    optimizer = Adam(clipnorm=CLIP_NORM)
+    loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
+    
+    epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, PATIENCE)
+    
+    print("Finished Pre-training on Movie dataset for %d epochs" % epochs)
+    
+    # do some dummy text generation
+    for i in range(len(msg_raw)):
+        reply, persona_attn_weights, msg_attn_weights = generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona_raw[i], msg_raw[i], persona_length, msg_length, out_seq_length)
+        print("Message:", msg_raw[i])
+        print("Reply:", reply + "\n")
+    # ------ ------ #
+    
+    # ------ Pretrain on Daily Dialogue ------ #
+    daily_epochs = 25
+    conversations = pre.load_dailydialogue_dataset()
+    
+    encoder_msg_input  = conversations[:, 0]
+    encoder_persona_input = np.array(["" for _ in encoder_msg_input])
+    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
+    
+    conversations = None
+    
+    msg_raw = encoder_msg_input[:20]
+    persona_raw = encoder_persona_input[:20]
+    
+    # integer encode training data
+    encoder_persona_input = pre.encode_sequences(tokenizer, persona_length, encoder_persona_input)
+    encoder_msg_input  = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
+    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
+    
+    epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, PATIENCE)
+    
+    print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
+    
+    # do some dummy text generation
+    for i in range(len(msg_raw)):
+        reply, persona_attn_weights, msg_attn_weights = generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona_raw[i], msg_raw[i], persona_length, msg_length, out_seq_length)
+        print("Message:", msg_raw[i])
+        print("Reply:", reply + "\n")
+    # ------ ------ #
+        
     
     # ------ Train on PERSONA-CHAT ------ #
     train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
+    train_data = train_data[:60]
     
     # train is a numpy array containing triples [message, reply, persona_index]
     # personas is an numpy array of strings for the personas
@@ -480,9 +526,6 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
     encoder_persona_input  = pre.encode_sequences(tokenizer, persona_length, encoder_persona_input)
     encoder_msg_input = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
-    
-    optimizer = Adam(clipnorm=CLIP_NORM)
-    loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
     
     epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, PATIENCE)
     
@@ -505,13 +548,11 @@ def save_seq2seq(encoder, decoder, deep_lstm):
         decoder_states_spec = []
         for i in range(1, 5):
             decoder_states_spec.append(tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='h%d' % i))
-            decoder_states_spec.append(tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='c%d' % i))
     else:
         encoder_fn = pre.SEQ2SEQ_ENCODER_MODEL_FN
         decoder_fn = pre.SEQ2SEQ_DECODER_MODEL_FN
         decoder_states_spec = [
-            tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='h1'), 
-            tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='c1')]
+            tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='h1')]
         
     tf.saved_model.save(encoder, encoder_fn , signatures=encoder.call.get_concrete_function(
         [
@@ -527,23 +568,6 @@ def save_seq2seq(encoder, decoder, deep_lstm):
             tf.TensorSpec(shape=[None, LSTM_DIM * 4], dtype=tf.float32, name="context_vec_concat"),
             decoder_states_spec
         ]))
-    
-def plot_attention(attn_weights, message, reply):
-    ''' Visualize attention weights '''
-    fig = plt.figure(figsize=(15, 15))
-    axis = fig.add_subplot(1, 1, 1)
-    
-    axis.matshow(attn_weights, cmap='viridis')
-    
-    font_size = {'fontsize' : 12}
-    
-    axis.set_xticklabels([''] + message.split(' '), fontdict=font_size, rotation=90)
-    axis.set_yticklabels([''] + reply.split(' '), fontdict=font_size)
-    
-    axis.xaxis.set_major_locator(ticker.MultipleLocator(1))
-    axis.yaxis.set_major_locator(ticker.MultipleLocator(1))
-
-    plt.show()
 
 def generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona, msg, persona_length, msg_length, out_seq_length):
     '''
@@ -552,7 +576,7 @@ def generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona, msg, p
     persona = pre.encode_sequences(tokenizer, persona_length, [persona])
     persona = tf.convert_to_tensor(persona)
     
-    msg = pre.encode_sequences(tokenizer, persona_length, [msg])
+    msg = pre.encode_sequences(tokenizer, msg_length, [msg])
     msg = tf.convert_to_tensor(msg)
     
     persona_attn_weights = np.zeros((out_seq_length, persona_length))
@@ -561,8 +585,7 @@ def generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona, msg, p
     encoder_persona_states, encoder_msg_states, *initial_state = encoder([persona, msg])
     
     decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]], 0)
-    context_vec_concat = tf.zeros(
-                (encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states[-1]))
+    context_vec_concat = tf.zeros((encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states.shape[-1]))
     
     reply = []
     for t in range(out_seq_length):

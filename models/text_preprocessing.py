@@ -2,7 +2,6 @@
 """
 @author: Fady Benattayallah
 """
-
 import numpy as np
 import string
 import pickle
@@ -38,6 +37,8 @@ ALLOWED_CHARS = ['.', ',', '_', '?']
 START_SEQ_TOKEN = "startseqq"
 END_SEQ_TOKEN   = "stopseqq"
 SEP_SEQ_TOKEN   = "sepseqq"
+SEGMENT_PERSONA_INDEX   = 1
+SEGMENT_MESSAGE_INDEX   = 2
 
 def remove_allowed_chars(punc_str):
     for char in ALLOWED_CHARS:

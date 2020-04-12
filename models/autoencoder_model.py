@@ -93,7 +93,7 @@ def train_on_batches(model, encoder_input, decoder_target, vocab_size, BATCH_SIZ
     ''' Trains the model batch by batch for the purposes of reducing memory usage 
     give integer encoded decoder target, will one hot encode this per-batch 
     also will create a validation set from 5% of the train set and do early stopping'''
-    encoder_input, encoder_input_val, decoder_target, decoder_target_val = train_test_split(encoder_input, decoder_target, test_size=0.05)
+    encoder_input, encoder_input_val, decoder_target, decoder_target_val = train_test_split(encoder_input, decoder_target, shuffle=False, test_size=0.05)
     
     min_val_loss = float("inf")
     no_improvement_counter = 0
