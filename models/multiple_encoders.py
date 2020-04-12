@@ -334,45 +334,45 @@ def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, l
         total_loss += batch_loss
     
     return total_loss
+
+@tf.function
+def train_step(persona, msg, decoder_target, encoder, decoder, loss_object, tokenizer, optimizer, BATCH_SIZE):
+    '''
+    Perform training on a single batch
+    persona  => (batch_size, persona_length)
+    msg => (batch_size, msg_length)
+    decoder_target shape => (batch_size, out_seq_length)
+    '''
+    loss = 0
+
+    with tf.GradientTape() as tape:
+        encoder_persona_states, encoder_msg_states, *initial_state = encoder([persona, msg])
+        
+        decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * BATCH_SIZE, 1)
+        context_vec_concat = tf.zeros((encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states.shape[-1]))
+        
+        # Teacher forcing, ground truth for previous word input to the decoder at current timestep
+        for t in range(1, decoder_target.shape[1]):
+            predictions, _, _, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, initial_state])
+            
+            loss += loss_function(decoder_target[:, t], predictions, loss_object)
+            
+            decoder_input = tf.expand_dims(decoder_target[:, t], 1)
+        
+    # backpropegate loss
+    batch_loss = (loss / int(decoder_target.shape[1]))
+        
+    variables = encoder.trainable_variables + decoder.trainable_variables
+
+    gradients = tape.gradient(loss, variables)
+        
+    optimizer.apply_gradients(zip(gradients, variables))
+        
+    return batch_loss
         
 
 def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_object, optimizer, save_best_model, deep_lstm, BATCH_SIZE, EPOCHS, PATIENCE):
     ''' Train seq2seq model, creates a validation set and uses early stopping '''
-    
-    @tf.function
-    def train_step(persona, msg, decoder_target):
-        '''
-        Perform training on a single batch
-        persona  => (batch_size, persona_length)
-        msg => (batch_size, msg_length)
-        decoder_target shape => (batch_size, out_seq_length)
-        '''
-        loss = 0
-
-        with tf.GradientTape() as tape:
-            encoder_persona_states, encoder_msg_states, *initial_state = encoder([persona, msg])
-            
-            decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * BATCH_SIZE, 1)
-            context_vec_concat = tf.zeros((encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states.shape[-1]))
-            
-            # Teacher forcing, ground truth for previous word input to the decoder at current timestep
-            for t in range(1, decoder_target.shape[1]):
-                predictions, _, _, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, initial_state])
-                
-                loss += loss_function(decoder_target[:, t], predictions, loss_object)
-                
-                decoder_input = tf.expand_dims(decoder_target[:, t], 1)
-            
-        # backpropegate loss
-        batch_loss = (loss / int(decoder_target.shape[1]))
-            
-        variables = encoder.trainable_variables + decoder.trainable_variables
-    
-        gradients = tape.gradient(loss, variables)
-            
-        optimizer.apply_gradients(zip(gradients, variables))
-            
-        return batch_loss
     
     encoder_persona_input, encoder_persona_input_val, encoder_msg_input, encoder_msg_input_val, decoder_target, decoder_target_val = train_test_split(
         encoder_persona_input, encoder_msg_input, decoder_target, test_size=0.05, shuffle=False)
@@ -395,7 +395,7 @@ def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, dec
         total_loss = 0
         
         for (batch, (persona, msg, decoder_target)) in enumerate(dataset.take(batches_per_epoch)):
-            batch_loss = train_step(persona, msg, decoder_target)
+            batch_loss = train_step(persona, msg, decoder_target, encoder, decoder, loss_object, tokenizer, optimizer, BATCH_SIZE)
             total_loss += batch_loss
             
             if pre.VERBOSE == 1:
