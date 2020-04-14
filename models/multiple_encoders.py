@@ -445,7 +445,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
         decoder = MultipleDecoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
     
     # ------ Pretrain on Movie dataset ------ #
-    movie_epochs = 25
+    movie_epochs = 7
     movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
 
     encoder_msg_input  = movie_conversations[:, 0]
@@ -477,7 +477,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
     # ------ ------ #
     
     # ------ Pretrain on Daily Dialogue ------ #
-    daily_epochs = 25
+    daily_epochs = 7
     conversations = pre.load_dailydialogue_dataset()
     
     encoder_msg_input  = conversations[:, 0]
@@ -508,7 +508,6 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
     
     # ------ Train on PERSONA-CHAT ------ #
     train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
-    train_data = train_data[:60]
     
     # train is a numpy array containing triples [message, reply, persona_index]
     # personas is an numpy array of strings for the personas
