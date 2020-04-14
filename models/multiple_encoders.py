@@ -371,7 +371,7 @@ def train_step(persona, msg, decoder_target, encoder, decoder, loss_object, toke
     return batch_loss
         
 
-def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_object, optimizer, save_best_model, deep_lstm, BATCH_SIZE, EPOCHS, PATIENCE):
+def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_object, optimizer, save_best_model, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE):
     ''' Train seq2seq model, creates a validation set and uses early stopping '''
     
     encoder_persona_input, encoder_persona_input_val, encoder_msg_input, encoder_msg_input_val, decoder_target, decoder_target_val = train_test_split(
@@ -414,14 +414,14 @@ def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, dec
         
         print("Epoch %d --- %d sec: Loss %f, val_loss: %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch, val_loss / batches_per_epoch_val))
         
-        if no_improvement_counter >= PATIENCE:
+        if no_improvement_counter >= PATIENCE and epoch > MIN_EPOCHS:
             print("Early stopping, no improvement over minimum in %d epochs" % PATIENCE)
             return epoch + 1
     
     save_seq2seq(encoder, decoder, deep_lstm)
     return EPOCHS            
 
-def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
+def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False):
     vocab, persona_length, msg_length, reply_length = pre.get_vocab()
     tokenizer = pre.fit_tokenizer(vocab)
     vocab_size = len(tokenizer.word_index) + 1
@@ -465,7 +465,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
     optimizer = Adam(clipnorm=CLIP_NORM)
     loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
     
-    epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, PATIENCE)
+    epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, 0, PATIENCE)
     
     print("Finished Pre-training on Movie dataset for %d epochs" % epochs)
     
@@ -494,7 +494,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
     encoder_msg_input  = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
-    epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, PATIENCE)
+    epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, 0, PATIENCE)
     
     print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
     
@@ -526,7 +526,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False):
     encoder_msg_input = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
-    epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, PATIENCE)
+    epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE)
     
     print("Finished Training on PERSONA-CHAT for %d epochs" % epochs)
     
