@@ -126,8 +126,8 @@ if __name__ == '__main__':
         print("Using GPU Device: {}\n".format(tf.test.gpu_device_name()))
         
         # consume GPU memory dynamically instead allocating all the memory
-        #gpu_devices = tf.config.experimental.list_physical_devices('GPU')
-        #tf.config.experimental.set_memory_growth(gpu_devices[0], True)
+        gpu_devices = tf.config.experimental.list_physical_devices('GPU')
+        tf.config.experimental.set_memory_growth(gpu_devices[0], True)
     else:
         print("Using CPU\n")
     
