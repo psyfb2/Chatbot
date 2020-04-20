@@ -370,22 +370,8 @@ def train_step(persona, msg, decoder_target, encoder, decoder, loss_object, toke
         
     return batch_loss
         
-
-def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_object, optimizer, save_best_model, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE):
-    ''' Train seq2seq model, creates a validation set and uses early stopping '''
-    
-    encoder_persona_input, encoder_persona_input_val, encoder_msg_input, encoder_msg_input_val, decoder_target, decoder_target_val = train_test_split(
-        encoder_persona_input, encoder_msg_input, decoder_target, test_size=0.05, shuffle=False)
-    
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
-    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
-    
-    val_dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input_val, encoder_msg_input_val,  decoder_target_val))
-    val_dataset = val_dataset.batch(BATCH_SIZE, drop_remainder=True)
-    
-    batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
-    batches_per_epoch_val = len(encoder_persona_input_val) // BATCH_SIZE
-        
+def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encoder, decoder, tokenizer, loss_object, optimizer, save_best_model, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE):
+    ''' Train seq2seq model, with the use of early stopping '''        
     min_val_loss = float("inf")
     no_improvement_counter = 0
     
@@ -401,23 +387,31 @@ def train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, dec
             if pre.VERBOSE == 1:
                 print("Epoch %d: Batch %d / %d: Loss %f" % (epoch + 1, batch + 1, batches_per_epoch, batch_loss.numpy()))
         
-        val_loss = calc_val_loss(batches_per_epoch_val, encoder, decoder, tokenizer, val_dataset, loss_object)
+        if val_dataset != None:
+            val_loss = calc_val_loss(batches_per_epoch_val, encoder, decoder, tokenizer, val_dataset, loss_object)
         
-        if val_loss < min_val_loss:
-            if save_best_model:
-                print("Saving model as best val loss decreased from %f to %f" % (min_val_loss, val_loss))
-                save_seq2seq(encoder, decoder, deep_lstm)
-            no_improvement_counter = 0
-            min_val_loss = val_loss
+            if val_loss < min_val_loss:
+                if save_best_model:
+                    print("Saving model as best val loss decreased from %f to %f" % (min_val_loss, val_loss))
+                    save_seq2seq(encoder, decoder, deep_lstm)
+                no_improvement_counter = 0
+                min_val_loss = val_loss
+            else:
+                no_improvement_counter += 1
+     
+            print("Epoch %d --- %d sec: Loss %f, val_loss: %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch, val_loss / batches_per_epoch_val))
         else:
-            no_improvement_counter += 1
-        
-        print("Epoch %d --- %d sec: Loss %f, val_loss: %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch, val_loss / batches_per_epoch_val))
+            print("Epoch %d --- %d sec: Loss %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch))
+            
+        if epoch + 1 == MIN_EPOCHS:
+            print("Saving model as min epochs %d reached", MIN_EPOCHS)
+            save_seq2seq(encoder, decoder, deep_lstm)
         
         if no_improvement_counter >= PATIENCE and epoch > MIN_EPOCHS:
             print("Early stopping, no improvement over minimum in %d epochs" % PATIENCE)
             return epoch + 1
     
+    print("Saving model as all %d epochs have been completed" % EPOCHS)
     save_seq2seq(encoder, decoder, deep_lstm)
     return EPOCHS            
 
@@ -445,7 +439,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
         decoder = MultipleDecoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
     
     # ------ Pretrain on Movie dataset ------ #
-    movie_epochs = 7
+    movie_epochs = 15
     movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
 
     encoder_msg_input  = movie_conversations[:, 0]
@@ -462,10 +456,16 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     encoder_msg_input  = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
+    
+    encoder_persona_input, encoder_msg_input, decoder_target = None, None, None
+    
     optimizer = Adam(clipnorm=CLIP_NORM)
     loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
     
-    epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, 0, PATIENCE)
+    epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, 0, PATIENCE)
     
     print("Finished Pre-training on Movie dataset for %d epochs" % epochs)
     
@@ -477,7 +477,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     # ------ ------ #
     
     # ------ Pretrain on Daily Dialogue ------ #
-    daily_epochs = 7
+    daily_epochs = 15
     conversations = pre.load_dailydialogue_dataset()
     
     encoder_msg_input  = conversations[:, 0]
@@ -494,7 +494,13 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     encoder_msg_input  = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
-    epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, 0, PATIENCE)
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
+    
+    encoder_persona_input, encoder_msg_input, decoder_target = None, None, None
+    
+    epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, 0, PATIENCE)
     
     print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
     
@@ -504,7 +510,6 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
         print("Message:", msg_raw[i])
         print("Reply:", reply + "\n")
     # ------ ------ #
-        
     
     # ------ Train on PERSONA-CHAT ------ #
     train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
@@ -526,15 +531,51 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     encoder_msg_input = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
-    epochs = train(encoder_persona_input, encoder_msg_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE)
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
+    
+    encoder_persona_input, encoder_msg_input, decoder_target = None, None, None
+    
+    # load the validation set
+    val_personas, val_data = pre.load_dataset(pre.VALID_FN)
+    
+    encoder_persona_input  = np.array([val_personas[int(row[2])] for row in val_data])
+    encoder_msg_input = val_data[:, 0]
+    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in val_data])
+    
+    val_data, val_personas = None, None
+    
+    persona_raw_val = encoder_persona_input[:20]
+    msg_raw_val = encoder_msg_input[:20]
+    
+    encoder_persona_input  = pre.encode_sequences(tokenizer, persona_length, encoder_persona_input)
+    encoder_msg_input = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
+    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
+    
+    val_dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
+    val_dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    batches_per_epoch_val = len(encoder_persona_input) // BATCH_SIZE
+    
+    encoder_persona_input, encoder_msg_input, decoder_target = None, None, None
+    
+    epochs = train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE)
     
     print("Finished Training on PERSONA-CHAT for %d epochs" % epochs)
     
     # do some dummy text generation
+    print("Responses from the training set:\n")
     for i in range(len(persona_raw)):
         reply, persona_attn_weights, msg_attn_weights = generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona_raw[i], msg_raw[i], persona_length, msg_length, out_seq_length)
         print("Persona:", persona_raw[i])
         print("Message:", msg_raw[i])
+        print("Reply:", reply + "\n")
+    
+    print("\nResponses from the validation set:\n")
+    for i in range(len(persona_raw)):
+        reply, persona_attn_weights, msg_attn_weights = generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona_raw_val[i], msg_raw_val[i], persona_length, msg_length, out_seq_length)
+        print("Persona:", persona_raw_val[i])
+        print("Message:", msg_raw_val[i])
         print("Reply:", reply + "\n")
     # ------ ------ #
 

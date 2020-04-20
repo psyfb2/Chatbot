@@ -92,7 +92,7 @@ if __name__ == '__main__':
                         help="Display loss for each batch during training, default = 1")
     
     parser.add_argument("--min_epochs", default=0, type=int,
-                        help="a minimum number of epochs which the model must be trained for on the PERSONA-CHAT dataset regardless of early stopping")
+                        help="a minimum number of epochs which the model must be trained for on the PERSONA-CHAT dataset regardless of early stopping, default = 0")
     
     parser.add_argument("--glove_filename", default="glove.6B.300d.txt", type=str,
                         help="The GLoVe filename to use e.g. glove.840B.300d.txt. Will automatically prepend data path")
