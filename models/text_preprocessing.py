@@ -20,7 +20,7 @@ DAILYDIALOGUE_FN    = os.path.join(PROJ_PATH, 'data', 'dialogues_text.txt')
 VOCAB_FN            = os.path.join(PROJ_PATH, 'data', 'vocab.txt')
 GLOVE_FN            = os.path.join(PROJ_PATH, 'data', 'glove.6B.300d.txt')
 
-MUTIENC_ENCODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_encoders_model')
+MULTIENC_ENCODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_encoders_model')
 MULTIENC_DECODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_decoder_model')
 
 SEQ2SEQ_ENCODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_encoder_model')
