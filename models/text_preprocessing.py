@@ -290,7 +290,7 @@ def load_dailydialogue_dataset(filename=DAILYDIALOGUE_FN, verbose=0):
 ''' Build a vocab file from the PERSONA-CHAT + daily dialogue dataset for tokenizer '''
 def build_vocab_file(verbose=0):
     personas, triples = load_dataset(TRAIN_FN)
-    personas2, triples2 = load_dataset(TEST_FN)
+    personas2, triples2 = load_dataset(VALID_FN)
     conversations = load_dailydialogue_dataset()
     
     # texts from daily dailogue and PERSONA CHAT

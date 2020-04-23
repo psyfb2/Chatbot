@@ -9,7 +9,6 @@ from time import time
 from tensorflow.keras.losses import SparseCategoricalCrossentropy
 from tensorflow.keras.layers import GRU, Dense, Embedding, Bidirectional, Dropout
 from tensorflow.keras.optimizers import Adam
-from sklearn.model_selection import train_test_split
 
 LSTM_DIM = 512
 CLIP_NORM = 5.0
@@ -317,7 +316,7 @@ def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, l
     
     for (batch, (persona, msg, decoder_target)) in enumerate(val_dataset.take(batches_per_epoch)):
         loss = 0
-        
+
         encoder_persona_states, encoder_msg_states, *initial_state = encoder([persona, msg])
         
         decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_persona_states.shape[0], 1)
@@ -437,7 +436,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     else:        
         encoder = MultipleEncoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
         decoder = MultipleDecoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
-    
+        
     # ------ Pretrain on Movie dataset ------ #
     movie_epochs = 15
     movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
@@ -510,13 +509,12 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
         print("Message:", msg_raw[i])
         print("Reply:", reply + "\n")
     # ------ ------ #
-    
+
     # ------ Train on PERSONA-CHAT ------ #
     train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
     
     # train is a numpy array containing triples [message, reply, persona_index]
     # personas is an numpy array of strings for the personas
-    
     encoder_persona_input  = np.array([train_personas[int(row[2])] for row in train_data])
     encoder_msg_input = train_data[:, 0]
     decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in train_data])
@@ -554,7 +552,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
     val_dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
-    val_dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    val_dataset = val_dataset.batch(BATCH_SIZE, drop_remainder=True)
     batches_per_epoch_val = len(encoder_persona_input) // BATCH_SIZE
     
     encoder_persona_input, encoder_msg_input, decoder_target = None, None, None

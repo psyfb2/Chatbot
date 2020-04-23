@@ -89,7 +89,7 @@ if __name__ == '__main__':
                         help="Whether or not to add an additional segment embedding to seq2seq models so that it can better distiguish persona from message. Only applies to seq2seq and deep_seq2seq, default = True")
     
     parser.add_argument("--verbose", default=1, type=int,
-                        help="Display loss for each batch during training, default = 1")
+                        help="Display loss for each batch during training, default = 0")
     
     parser.add_argument("--min_epochs", default=0, type=int,
                         help="a minimum number of epochs which the model must be trained for on the PERSONA-CHAT dataset regardless of early stopping, default = 0")
