@@ -427,6 +427,8 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     print('Message sequence length: %d' % msg_length)
     print('Output sequence length: %d' % out_seq_length)
     
+    BUFFER_SIZE = 15000
+    
     embedding_matrix = pre.load_glove_embedding(tokenizer, pre.GLOVE_FN)
     embedding_matrix = Embedding(vocab_size, embedding_matrix.shape[1], weights=[embedding_matrix], trainable=True, mask_zero=True, name="tied_embedding")
     
@@ -455,7 +457,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     encoder_msg_input  = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target)).shuffle(BUFFER_SIZE)
     dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
     batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
     
@@ -493,7 +495,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     encoder_msg_input  = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target)).shuffle(BUFFER_SIZE)
     dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
     batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
     
@@ -529,7 +531,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     encoder_msg_input = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
     decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
     
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target)).shuffle(BUFFER_SIZE)
     dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
     batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
     

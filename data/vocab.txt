@@ -1,10 +1,8 @@
 .
 i
 you
-your
 a
 ?
-persona
 ,
 to
 my
@@ -36,6 +34,7 @@ at
 favorite
 on
 be
+your
 too
 about
 was
@@ -7951,6 +7950,7 @@ damaged
 horn
 2019
 ooooh
+persona
 firms
 seconds
 stares
@@ -19662,6 +19662,6 @@ whoo
 startseqq
 sepseqq
 stopseqq
-max persona length: 92
-max message length: 31
-max reply length: 34
+max persona length: 71
+max message length: 24
+max reply length: 24

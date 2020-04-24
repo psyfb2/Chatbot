@@ -214,7 +214,7 @@ def load_dataset(filename, verbose=0):
     triples = clean_triples(conversations)
     for i in range(len(personas)):
         for j in range(len(personas[i])):
-            personas[i][j] = clean_line(remove_first_num(personas[i][j]))
+            personas[i][j] = clean_line(remove_first_num(personas[i][j]).replace("your persona", "").strip())
         personas[i] = ' '.join(personas[i])
     personas = np.array(personas)
     
@@ -309,9 +309,9 @@ def build_vocab_file(verbose=0):
         del tokenizer.word_counts[w]
     '''
     
-    max_persona_len = max_seq_length(np.concatenate([personas, personas2])) 
-    max_msg_len     = max_seq_length(np.concatenate([triples[:, 0], triples2[:, 0]])) + 3
-    max_reply_len   = max_seq_length(np.concatenate([triples[:, 1], triples2[:, 1]])) + 3
+    max_persona_len = percentile_length(np.concatenate([personas, personas2]), 99.8) 
+    max_msg_len     = percentile_length(np.concatenate([triples[:, 0], triples2[:, 0]]), 99.5) + 3
+    max_reply_len   = percentile_length(np.concatenate([triples[:, 1], triples2[:, 1]]), 99.5) + 3
     
     # write the vocab and max lengths to a file
     with open(VOCAB_FN, 'wt') as f:
@@ -456,6 +456,13 @@ def load_object(filename):
     returns sentence with max num of words '''
 def max_seq_length(lines):
     return max([len(line.split()) for line in lines])        
+
+''' Given a list of cleaned lines ["sentence 1", "sentence 2", ...] 
+    returns sentence length at the given percentile between 0 and 99 '''
+def percentile_length(lines, percentile):
+    print(lines[:-5])
+    lengths = sorted([len(line.split()) for line in lines])
+    return lengths[int(((len(lengths)) * percentile) // 100)]
 
 if __name__ == '__main__':
     # test dataset loading works correctly
