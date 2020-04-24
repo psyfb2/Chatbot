@@ -287,30 +287,31 @@ def load_dailydialogue_dataset(filename=DAILYDIALOGUE_FN, verbose=0):
     return np.array(conversations)
             
 
-''' Build a vocab file from the PERSONA-CHAT + daily dialogue dataset for tokenizer '''
+''' Build a vocab file from the PERSONA-CHAT dataset for tokenizer '''
 def build_vocab_file(verbose=0):
     personas, triples = load_dataset(TRAIN_FN)
     personas2, triples2 = load_dataset(VALID_FN)
-    conversations = load_dailydialogue_dataset()
     
-    # texts from daily dailogue and PERSONA CHAT
+    # texts from PERSONA CHAT
     texts =  np.concatenate([personas, personas2, 
                         triples[:, 0], triples[:, 1], triples2[:, 0], 
-                        triples2[:, 1], np.array([s[0] for s in conversations])])
+                        triples2[:, 1]])
     
     
     tokenizer = fit_tokenizer(texts, oov_token=False)
     
     # remove infrequent words
+    '''
     low_count_words = [w for w,c in tokenizer.word_counts.items() if c < 2]
     for w in low_count_words:
         del tokenizer.word_index[w]
         del tokenizer.word_docs[w]
         del tokenizer.word_counts[w]
-        
+    '''
+    
     max_persona_len = max_seq_length(np.concatenate([personas, personas2])) 
-    max_msg_len     = max_seq_length(np.concatenate([triples[:, 0], triples2[:, 0]])) + 5
-    max_reply_len   = max_seq_length(np.concatenate([triples[:, 1], triples2[:, 1]])) + 5
+    max_msg_len     = max_seq_length(np.concatenate([triples[:, 0], triples2[:, 0]])) + 3
+    max_reply_len   = max_seq_length(np.concatenate([triples[:, 1], triples2[:, 1]])) + 3
     
     # write the vocab and max lengths to a file
     with open(VOCAB_FN, 'wt') as f:

@@ -348,7 +348,7 @@ def train_step(persona, msg, decoder_target, encoder, decoder, loss_object, toke
         encoder_persona_states, encoder_msg_states, *initial_state = encoder([persona, msg])
         
         decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * BATCH_SIZE, 1)
-        context_vec_concat = tf.zeros((encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states.shape[-1]))
+        context_vec_concat = tf.zeros((BATCH_SIZE, encoder_persona_states.shape[-1] + encoder_msg_states.shape[-1]))
         
         # Teacher forcing, ground truth for previous word input to the decoder at current timestep
         for t in range(1, decoder_target.shape[1]):
