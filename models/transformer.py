@@ -27,51 +27,94 @@ def create_subword_tokenizer():
     train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
     val_personas, val_data = pre.load_dataset(pre.VALID_FN)
     
-    all_text = [p for p in train_personas + val_personas] + [msg for msg in train_data[:, 0] + val_data[:, 0]] + [rply for rply in train_data[:, 1] + val_data[:, 1]]
+    personas = np.concatenate([train_personas, val_personas])
+    messages = np.concatenate([train_data[:, 0], val_data[:, 0]])
+    replys = np.concatenate([train_data[:, 1], val_data[:, 1]])
+
+    all_text = [p for p in personas] + [msg for msg in messages] + [rply for rply in replys]
     
     tokenizer = tfds.features.text.SubwordTextEncoder.build_from_corpus(
         all_text, target_vocab_size=8192)
     
     # get the percentile length of subwords of encoded examples 
-    personas = np.concatenate([train_personas, val_personas])
-    persona_length = percentile_length(personas, tokenizer, 99.5)
+    in_seq_length = percentile_length(
+        [train_personas[int(row[2])] + ' ' + row[0] for row in train_data], 
+        tokenizer, 99.75)
+    out_seq_length = percentile_length(train_data[:, 1], tokenizer, 99.5)
     
-    messages = np.concatenate([train_data[:, 0], val_data[:, 0]])
-    message_length = percentile_length(messages, tokenizer, 97.5)
-    
-    replys = np.concatenate([train_data[:, 1], val_data[:, 1]])
-    reply_length = percentile_length(replys)
-    
-    # training examples with input sequence > persona_length + message_length
-    # or reply > reply_length, should be dropped
-    
-    return tokenizer, persona_length, message_length, reply_length
-    
-    
-    
-    
+    # training examples with input sequence > in_seq_length
+    # or reply > out_seq_length, should be dropped, +3 for SOS, EOS, SOS tokens
+    return tokenizer, in_seq_length + 3, out_seq_length + 2
 
-def encode_sentence(persona, message, tokenizer, persona_length, msg_length):
-    ''' Tokenize a persona + message sentence for the encoder '''
+def encode_sentence(persona, message, tokenizer, max_length, drop_example=False):
+    ''' Tokenize a sentences and pad/truncate according to max_length '''
     
     if persona == "":
-        encoded = tokenizer.encode(message)
-        # truncate the message
-        del encoded[:msg_length - 2]
-        
-        encoded = [tokenizer.vocab_size + SOS] + encoded + [tokenizer.vocab_size + EOS]
-    else:
-        persona = tokenizer.encode(persona)
-        del persona[:persona_length - 1]
-        
-        message = tokenizer.encode(message)
-        del message[:msg_length - 1]
-        
-        encoded = [tokenizer.vocab_size + SOS] +  persona + [tokenizer.vocab_size + SEP] + message + [tokenizer.vocab_size + EOS]
+        # encoding a reply
+        encoded = [tokenizer.vocab_size + SOS] + tokenizer.encode(message) + [tokenizer.vocab_size + EOS]
+    else:        
+        encoded = [tokenizer.vocab_size + SOS] +  tokenizer.encode(persona) + [tokenizer.vocab_size + SEP] + tokenizer.encode(message) + [tokenizer.vocab_size + EOS]
     
-    # pad by persona_length + msg_length
-    encoded = encoded + [0 for i in range(persona_length + msg_length - len(encoded))]
+    # pad, truncate or drop the example
+    if len(encoded) > max_length:
+        if drop_example:
+            return None
+        else:
+            # truncate the message so it fits in the max length specified
+            del encoded[:max_length]
+    else:
+        encoded = encoded + [0 for i in range(max_length - len(encoded))]
     return encoded
+
+def encode_training_examples(personas, msg_reply_pairs, tokenizer, in_seq_length, out_seq_length):
+    ''' Encode all training examples '''
+    encoder_input = []
+    decoder_target = []
+    
+    for i in range(len(msg_reply_pairs)):
+        if personas == None:
+            # no persona data
+            msg = encode_sentence("", msg_reply_pairs[i, 0], tokenizer, in_seq_length, True)
+            reply = encode_sentence("", msg_reply_pairs[i, 1], tokenizer, out_seq_length, True)
+        else:
+            # persona data included
+            msg = encode_sentence(personas[int(msg_reply_pairs[i, 2])], 
+                                  msg_reply_pairs[i, 0], tokenizer, in_seq_length, True)
+            reply = encode_sentence("", msg_reply_pairs[i, 1], tokenizer, out_seq_length, True)
+            
+        # drop this training example if it exceeds maximum length
+        if msg != None and reply != None:
+            encoder_input.append(msg)
+            decoder_target.append(reply)
+            
+    
+    return np.array(encoder_input), np.array(decoder_target)
+
+def generate_segment_list(encoded, pad_length, sep_index, no_persona=False):
+    ''' Generates a list of segment indicies based on the seperator index '''
+    sep_seq_found = no_persona
+    segment = []
+    c = 0
+    
+    for subword_index in encoded:
+        if c >= pad_length or subword_index == 0:
+            break
+        
+        if sep_seq_found:
+            # message segment
+            segment.append(MSG)
+        else:
+            # persona segment
+            segment.append(PSN)
+        if subword_index == sep_index:
+            sep_seq_found = True
+        c += 1
+        
+    # pad the segment array
+    for i in range(pad_length - len(segment)):
+        segment.append(0)
+            
+    return segment
 
 
 def get_angles(pos, i, d_model):
@@ -95,7 +138,7 @@ def positional_encoding(pos, d_model):
     return tf.cast(pos_encoding, dtype=tf.float32)
 
 def create_look_ahead_mask(size):
-    ''' Ensure the decoder can only se'''
+    ''' Ensure the decoder can only see words it's generated '''
     mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
     # => (reply_length, reply_length)
     return mask  
@@ -108,36 +151,66 @@ def create_padding_mask(seq):
     # => (batch_size, 1, 1, seq_len)
     return seq[:, tf.newaxis, tf.newaxis, :]  
 
+def dot_product_attention(q, k, v, mask):
+    ''' Calculate dot-product attention for Transformers
+        q, k, v should have the same batch size and words per batch
+        mask can be look-ahead or padding which effects its dimesnions
+        
+        Args:
+          q: query shape => (..., m, d_k)
+          k: key shape => (..., m, d_k)
+          v: value shape => (..., m, d_v)
+          mask: float tensor with shape broadcastable 
+                to (..., m, m), defaults to None
+          
+        Returns:
+          output, attention_weights
+    '''
+    # => (batch_size, m, m)
+    q_kt = tf.matmul(q, k, tranpose_b=True)
+    
+    dk = tf.cast(tf.shape(k)[-1], tf.float32)
+    scaled_q_kt = q_kt / tf.math.sqrt(dk)
+    
+    # mask this tensor by multiplying by pad positions by -infinite
+    # so they will be approximately 0 in the softmax
+    if mask is not None:
+        scaled_q_kt += (mask * -1e9)
+    
+    attn_weights = tf.nn.softmax(scaled_q_kt, axis=-1)
+    
+    #> (batch_size, m, d_v)
+    q_kt_v = tf.matmul(scaled_q_kt, v)
+    
+    return q_kt_v, attn_weights
+    
+
 def train_transformer(BATCH_SIZE):
-    tokenizer = create_subword_tokenizer()
+    tokenizer, in_seq_length, out_seq_length = create_subword_tokenizer()
     sample_str = "optimus prime goodness"
     assert tokenizer.decode(tokenizer.encode(sample_str)) == sample_str
     
-    BUFFER_SIZE = 20000
+    print("Input Length: %d " % in_seq_length)
+    print("Output Length: %d" % out_seq_length)
     
-     # ------ Pretrain on Movie dataset ------ #
+    BUFFER_SIZE = 15000
+    
+    # ------ Pretrain on Movie dataset ------ #
     movie_epochs = 15
     movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
     
-    encoder_input  = movie_conversations[:, 0]
-    decoder_target = movie_conversations[:, 1]
-    movie_conversations = None
-    
-    raw = encoder_input[:20]
+    raw = movie_conversations[:20, 0]
+    #movie_conversations = None
     
     # integer encode sequences
-    x = [encode_sentence("", msg, tokenizer, PERSONA_LENGTH, MSG_LENGTH) for msg in encoder_input]
-    y = [encode_sentence("", reply, tokenizer, 0, REPLY_LENGTH) for reply in decoder_target]
-
-    segment_input  = np.array([pre.generate_segment_array(msg, PERSONA_LENGTH + MSG_LENGTH, True) for msg in encoder_input])
-    encoder_input  = np.array(x)
-    decoder_target = np.array(y)
-    
-    
+    encoder_input, decoder_target = encode_training_examples(None, movie_conversations, tokenizer, in_seq_length, out_seq_length)
+    segment_input  = np.array([generate_segment_list(encoded_msg, in_seq_length, True) for encoded_msg in encoder_input])
     
     dataset = tf.data.Dataset.from_tensor_slices(
         (encoder_input, segment_input, decoder_target)).cache().shuffle(BUFFER_SIZE)
     dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    
+    
     
     
     
