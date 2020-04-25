@@ -143,11 +143,11 @@ if __name__ == '__main__':
             
         elif args.train == model_choices[1]:
             seq2seq.train_seq2seq(
-                args.epochs, args.batch_size, args.early_stopping_patience, deep_lstm=False)
+                args.epochs, args.batch_size, args.early_stopping_patience, args.min_epochs, deep_lstm=False)
             
         elif args.train == model_choices[2]:
             seq2seq.train_seq2seq(
-                args.epochs, args.batch_size, args.early_stopping_patience, deep_lstm=True)
+                args.epochs, args.batch_size, args.early_stopping_patience, args.min_epochs, deep_lstm=True)
             
         elif args.train == model_choices[3]:
             multenc.train_multiple_encoders(args.epochs, args.batch_size, args.early_stopping_patience, args.min_epochs ,deep_lstm=False)

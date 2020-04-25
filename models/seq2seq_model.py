@@ -274,60 +274,48 @@ def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, l
         total_loss += batch_loss
     
     return total_loss
+
+@tf.function
+def train_step(encoder_input, segment_input, decoder_target, encoder, decoder, loss_object, tokenizer, optimizer, BATCH_SIZE):
+    '''
+    Perform training on a single batch
+    encoder_input shape  => (batch_size, in_seq_length)
+    segment_input shape  => (batch_size, in_seq_length)
+    decoder_target shape => (batch_size, out_seq_length)
+    '''
+    loss = 0
+    
+    with tf.GradientTape() as tape:
+        encoder_outputs, *initial_state = encoder([encoder_input, segment_input])
+        
+        decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * BATCH_SIZE, 1)
+        context_vec = tf.zeros((encoder_outputs.shape[0], encoder_outputs.shape[-1]))
+        
+        # Teacher forcing, ground truth for previous word input to the decoder at current timestep
+        for t in range(1, decoder_target.shape[1]):
+            predictions, _, context_vec, *initial_state = decoder([decoder_input, encoder_outputs, context_vec, initial_state])
+            
+            loss += loss_function(decoder_target[:, t], predictions, loss_object)
+            
+            decoder_input = tf.expand_dims(decoder_target[:, t], 1)
+        
+    # backpropegate loss
+    batch_loss = (loss / int(decoder_target.shape[1]))
+
+    variables = encoder.trainable_variables + decoder.trainable_variables
+
+    gradients = tape.gradient(loss, variables)
+    
+    optimizer.apply_gradients(zip(gradients, variables))
+    
+    return batch_loss
         
 
-def train(encoder_input, segment_input, decoder_target, encoder, decoder, tokenizer, loss_object, optimizer, save_best_model, deep_lstm, BATCH_SIZE, EPOCHS, PATIENCE):
-    ''' Train seq2seq model, creates a validation set and uses early stopping '''
-    
-    @tf.function
-    def train_step(encoder_input, segment_input, decoder_target):
-        '''
-        Perform training on a single batch
-        encoder_input shape  => (batch_size, in_seq_length)
-        segment_input shape  => (batch_size, in_seq_length)
-        decoder_target shape => (batch_size, out_seq_length)
-        '''
-        loss = 0
-        
-        with tf.GradientTape() as tape:
-            encoder_outputs, *initial_state = encoder([encoder_input, segment_input])
-            
-            decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * BATCH_SIZE, 1)
-            context_vec = tf.zeros((encoder_outputs.shape[0], encoder_outputs.shape[-1]))
-            
-            # Teacher forcing, ground truth for previous word input to the decoder at current timestep
-            for t in range(1, decoder_target.shape[1]):
-                predictions, _, context_vec, *initial_state = decoder([decoder_input, encoder_outputs, context_vec, initial_state])
-                
-                loss += loss_function(decoder_target[:, t], predictions, loss_object)
-                
-                decoder_input = tf.expand_dims(decoder_target[:, t], 1)
-            
-        # backpropegate loss
-        batch_loss = (loss / int(decoder_target.shape[1]))
-    
-        variables = encoder.trainable_variables + decoder.trainable_variables
-
-        gradients = tape.gradient(loss, variables)
-        
-        optimizer.apply_gradients(zip(gradients, variables))
-        
-        return batch_loss
-
-    encoder_input, encoder_input_val, segment_input, segment_input_val, decoder_target, decoder_target_val = train_test_split(encoder_input, segment_input, decoder_target, shuffle=False, test_size=0.05)
-    
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, segment_input, decoder_target))
-    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
-    
-    val_dataset = tf.data.Dataset.from_tensor_slices((encoder_input_val, segment_input_val, decoder_target_val))
-    val_dataset = val_dataset.batch(BATCH_SIZE, drop_remainder=True)
-    
-    batches_per_epoch = len(encoder_input) // BATCH_SIZE
-    batches_per_epoch_val = len(encoder_input_val) // BATCH_SIZE
-        
+def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encoder, decoder, tokenizer, loss_object, optimizer, save_best_model, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE):
+    ''' Train seq2seq model, uses early stopping on the validation set '''
     min_val_loss = float("inf")
     no_improvement_counter = 0
-    
+
     for epoch in range(EPOCHS):
         start = time()
         
@@ -335,74 +323,56 @@ def train(encoder_input, segment_input, decoder_target, encoder, decoder, tokeni
         
         for (batch, (encoder_input, segment_input, decoder_target)) in enumerate(dataset.take(batches_per_epoch)):
             
-            batch_loss = train_step(encoder_input, segment_input, decoder_target)
+            batch_loss = train_step(encoder_input, segment_input, decoder_target, encoder, decoder, loss_object, tokenizer, optimizer, BATCH_SIZE)
             total_loss += batch_loss
             
             if pre.VERBOSE == 1:
-                print("Epoch %d: Batch %d: Loss %f" % (epoch + 1, batch + 1, batch_loss.numpy()))
+                print("Epoch %d: Batch %d / %d: Loss %f" % (epoch + 1, batch + 1, batches_per_epoch, batch_loss.numpy()))
         
-        val_loss = calc_val_loss(batches_per_epoch_val, encoder, decoder, tokenizer, val_dataset, loss_object)
         
-        if val_loss < min_val_loss:
-            if save_best_model:
-                print("Saving model as best val loss decreased from %f to %f" % (min_val_loss, val_loss))
-                save_seq2seq(encoder, decoder, deep_lstm)
-            no_improvement_counter = 0
-            min_val_loss = val_loss
+        if val_dataset != None:
+            val_loss = calc_val_loss(batches_per_epoch_val, encoder, decoder, tokenizer, val_dataset, loss_object)
+        
+            if val_loss < min_val_loss:
+                if save_best_model:
+                    print("Saving model as best val loss decreased from %f to %f" % (min_val_loss, val_loss))
+                    save_seq2seq(encoder, decoder, deep_lstm)
+                no_improvement_counter = 0
+                min_val_loss = val_loss
+            else:
+                no_improvement_counter += 1
+     
+            print("Epoch %d --- %d sec: Loss %f, val_loss: %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch, val_loss / batches_per_epoch_val))
         else:
-            no_improvement_counter += 1
+            print("Epoch %d --- %d sec: Loss %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch))
+            
+        if epoch + 1 == MIN_EPOCHS:
+            print("Saving model as min epochs %d reached", MIN_EPOCHS)
+            save_seq2seq(encoder, decoder, deep_lstm)
         
-        print("Epoch %d --- %d sec: Loss %f, val_loss: %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch, val_loss / batches_per_epoch_val))
-        
-        if no_improvement_counter >= PATIENCE:
+        if no_improvement_counter >= PATIENCE and epoch > MIN_EPOCHS:
             print("Early stopping, no improvement over minimum in %d epochs" % PATIENCE)
             return epoch + 1
-    
+        
+    print("Saving model as all %d epochs have been completed" % EPOCHS)
     save_seq2seq(encoder, decoder, deep_lstm)
-    return EPOCHS
-
-def generate_segment_array(sentence, pad_length, no_persona=False):
-    ''' Generates a list of segment indicies based on the SEP_SEQ_TOKEN found in sentence '''
-    sep_seq_found = no_persona
-    segment = []
-    c = 0
-    
-    for word in sentence.split(' '):
-        if c >= pad_length:
-            break
-        
-        if sep_seq_found:
-            # message segment
-            segment.append(pre.SEGMENT_MESSAGE_INDEX)
-        else:
-            # persona segment
-            segment.append(pre.SEGMENT_PERSONA_INDEX)
-        if word == pre.SEP_SEQ_TOKEN:
-            sep_seq_found = True
-        c += 1
-        
-    # pad the segment array
-    for i in range(pad_length - len(segment)):
-        segment.append(0)
-            
-    return segment
+    return EPOCHS   
             
 
-def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False, use_segment_embedding=True):
+def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use_segment_embedding=True):
     vocab, persona_length, msg_length, reply_length = pre.get_vocab()
     tokenizer = pre.fit_tokenizer(vocab)
     vocab_size = len(tokenizer.word_index) + 1
     vocab = None
     
-    in_seq_length = persona_length + msg_length
-    out_seq_length = reply_length
-    
     print('Vocab size: %d' % vocab_size)
-    print('Input sequence length: %d' % in_seq_length)
-    print('Output sequence length: %d' % out_seq_length)
+    print('Input sequence length: %d' % (persona_length + msg_length))
+    print('Output sequence length: %d' % reply_length)
     
+    BUFFER_SIZE = 15000
+
     # ------ Pretrain on Movie dataset ------ #
-    movie_epochs = 50
+    movie_epochs = 15
     movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
     
     encoder_input  = movie_conversations[:, 0]
@@ -413,10 +383,16 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False, use_segment_emb
     raw = encoder_input[:20]
 
     # integer encode training data
-    segment_input  = np.array([generate_segment_array(msg, in_seq_length, no_persona=True) for msg in encoder_input])
-    encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
-    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
+    segment_input  = np.array([pre.generate_segment_array(msg,  persona_length + msg_length, no_persona=True) for msg in encoder_input])
+    encoder_input  = pre.encode_sequences(tokenizer, persona_length + msg_length, encoder_input)
+    decoder_target = pre.encode_sequences(tokenizer, reply_length, decoder_target)
     
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, segment_input,  decoder_target)).shuffle(BUFFER_SIZE)
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    batches_per_epoch = len(encoder_input) // BATCH_SIZE
+    
+    encoder_input, segment_input, decoder_target = None, None, None
+
     # load GloVe embeddings, make the embeddings for encoder and decoder tied https://www.aclweb.org/anthology/E17-2025.pdf
     embedding_matrix = pre.load_glove_embedding(tokenizer, pre.GLOVE_FN)
     e_dim = embedding_matrix.shape[1]
@@ -430,23 +406,23 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False, use_segment_emb
         decoder = Decoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
     
     optimizer = Adam(clipnorm=CLIP_NORM)
-    # will give labels as integers instead of one hot so use sparse CCE
+    # will give labels as integers instead of one-hot so use sparse CCE
     loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
 
-    movie_epochs = train(encoder_input, segment_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, PATIENCE)
+    movie_epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, EPOCHS, 0, PATIENCE)
     
     print("Finished Pre-training on Cornell Movie Dataset for %d epochs" % movie_epochs)
     
     # do some dummy text generation
     for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
+        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], persona_length + msg_length, reply_length)
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
     # ------ ------ #
 
     
     # ------ Pretrain on Daily Dialogue ------ #
-    daily_epochs = 50
+    daily_epochs = 15
     conversations = pre.load_dailydialogue_dataset()
     
     encoder_input  = conversations[:, 0]
@@ -457,48 +433,87 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, deep_lstm=False, use_segment_emb
     raw = encoder_input[:20]
     
     # integer encode training data
-    segment_input  = np.array([generate_segment_array(msg, in_seq_length, no_persona=True) for msg in encoder_input])
-    encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
-    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
+    segment_input  = np.array([pre.generate_segment_array(msg, persona_length + msg_length, no_persona=True) for msg in encoder_input])
+    encoder_input  = pre.encode_sequences(tokenizer, persona_length + msg_length, encoder_input)
+    decoder_target = pre.encode_sequences(tokenizer, reply_length, decoder_target)
     
-    daily_epochs = train(encoder_input, segment_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, PATIENCE)
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, segment_input,  decoder_target)).shuffle(BUFFER_SIZE)
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    batches_per_epoch = len(encoder_input) // BATCH_SIZE
+    
+    encoder_input, segment_input, decoder_target = None, None, None
+    
+    daily_epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, EPOCHS, 0, PATIENCE)
     
     print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
     
     # do some dummy text generation
     for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
+        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], persona_length + msg_length, reply_length)
         print("Message:", raw[i])
         print("Reply:", reply + "\n")
     # ------ ------ #
     
-    
+
     # ------ Train on PERSONA-CHAT ------ #
     train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
     
     # train is a numpy array containing triples [message, reply, persona_index]
     # personas is an numpy array of strings for the personas
 
-    encoder_input  = np.array([train_personas[int(row[2])] + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in train_data])
-    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in train_data])
+    encoder_input  = np.array(
+        [pre.truncate(train_personas[int(row[2])], persona_length) + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in train_data])
+    decoder_target = np.array(
+        [pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in train_data])
     
     train_data, train_personas = None, None
     
     raw = encoder_input[:20]
     
     # integer encode training data
-    segment_input  = np.array([generate_segment_array(msg, in_seq_length) for msg in encoder_input])
-    encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
-    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
+    segment_input  = np.array([pre.generate_segment_array(msg, persona_length + msg_length) for msg in encoder_input])
+    encoder_input  = pre.encode_sequences(tokenizer, persona_length + msg_length, encoder_input)
+    decoder_target = pre.encode_sequences(tokenizer, reply_length, decoder_target)
     
-    epochs = train(encoder_input, segment_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, PATIENCE)
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, segment_input,  decoder_target)).shuffle(BUFFER_SIZE)
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    batches_per_epoch = len(encoder_input) // BATCH_SIZE
+    
+    encoder_input, segment_input, decoder_target = None, None, None
+    
+    # load validation set
+    val_personas, val_data = pre.load_dataset(pre.VALID_FN)
+    
+    encoder_input  = np.array(
+        [pre.truncate(val_personas[int(row[2])], persona_length) + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in val_data])
+    decoder_target = np.array(
+        [pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in val_data])
+    
+    val_personas, val_data = None, None
+    
+    val_raw = encoder_input[:20]
+    
+    segment_input  = np.array([pre.generate_segment_array(msg, persona_length + msg_length) for msg in encoder_input])
+    encoder_input  = pre.encode_sequences(tokenizer, persona_length + msg_length, encoder_input)
+    decoder_target = pre.encode_sequences(tokenizer, reply_length, decoder_target)
+    
+    val_dataset = tf.data.Dataset.from_tensor_slices((encoder_input, segment_input,  decoder_target)).shuffle(BUFFER_SIZE)
+    val_dataset = val_dataset.batch(BATCH_SIZE, drop_remainder=True)
+    val_batches_per_epoch = len(encoder_input) // BATCH_SIZE
+    
+    epochs = train(dataset, val_dataset, batches_per_epoch, val_batches_per_epoch, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE)
     
     print("Finished Training on PERSONA-CHAT for %d epochs" % epochs)
     
     # do some dummy text generation
     for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
+        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], persona_length + msg_length, reply_length)
         print("Message:", raw[i])
+        print("Reply:", reply + "\n")
+        
+    for i in range(len(val_raw)):
+        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, val_raw[i], persona_length + msg_length, reply_length)
+        print("Message:", val_raw[i])
         print("Reply:", reply + "\n")
     # ------ ------ #
 
@@ -559,7 +574,7 @@ def generate_reply_seq2seq(encoder, decoder, tokenizer, input_msg, in_seq_length
     input_seq = tf.convert_to_tensor(input_seq)
     
     # generate the segment for the input_msg by using seperator token 
-    segment_input  = np.array([generate_segment_array(input_msg, in_seq_length)])
+    segment_input  = np.array([pre.generate_segment_array(input_msg, in_seq_length)])
     segment_input  = tf.convert_to_tensor(segment_input)
     
     attn_weights = np.zeros((out_seq_length, in_seq_length))
@@ -614,7 +629,7 @@ def beam_search_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_s
     input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
     input_seq = tf.convert_to_tensor(input_seq)
     
-    segment_input  = np.array([generate_segment_array(input_msg, in_seq_length)])
+    segment_input  = np.array([pre.generate_segment_array(input_msg, in_seq_length)])
     segment_input  = tf.convert_to_tensor(segment_input)
     
     encoder_out, *initial_state = encoder_model([input_seq, segment_input])

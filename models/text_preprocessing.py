@@ -140,6 +140,39 @@ def index_to_word(integer, tokenizer):
             return w
     return None
 
+def truncate(s, length):
+    split = s.split(' ')
+    if len(split) <= length:
+        return s
+    else:
+        return ' '.join(split[:length])
+
+def generate_segment_array(sentence, pad_length, no_persona=False):
+    ''' Generates a list of segment indicies based on the SEP_SEQ_TOKEN found in sentence '''
+    sep_seq_found = no_persona
+    segment = []
+    c = 0
+    
+    for word in sentence.split(' '):
+        if c >= pad_length:
+            break
+        
+        if sep_seq_found:
+            # message segment
+            segment.append(SEGMENT_MESSAGE_INDEX)
+        else:
+            # persona segment
+            segment.append(SEGMENT_PERSONA_INDEX)
+        if word == SEP_SEQ_TOKEN:
+            sep_seq_found = True
+        c += 1
+        
+    # pad the segment array
+    for i in range(pad_length - len(segment)):
+        segment.append(0)
+            
+    return segment
+
 def remove_contractions(sentence):
     sentence = re.sub(r"won\'t", "will not", sentence)
     sentence = re.sub(r"can\'t", "can not", sentence)
@@ -455,13 +488,12 @@ def load_object(filename):
 ''' Given a list of cleaned lines ["sentence 1", "sentence 2", ...] 
     returns sentence with max num of words '''
 def max_seq_length(lines):
-    return max([len(line.split()) for line in lines])        
+    return max([len(line.split(' ')) for line in lines])        
 
 ''' Given a list of cleaned lines ["sentence 1", "sentence 2", ...] 
     returns sentence length at the given percentile between 0 and 99 '''
 def percentile_length(lines, percentile):
-    print(lines[:-5])
-    lengths = sorted([len(line.split()) for line in lines])
+    lengths = sorted([len(line.split(' ')) for line in lines])
     return lengths[int(((len(lengths)) * percentile) // 100)]
 
 if __name__ == '__main__':
