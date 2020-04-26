@@ -8,6 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import text_preprocessing as pre
 import tensorflow_datasets as tfds
+from tf.keras.layers import Dense, LayerNormalization, Dropout
 
 SOS = 0
 SEP = 1
@@ -15,6 +16,171 @@ EOS = 2
 
 PSN = 1
 MSG = 2
+
+class MultiHeadAttention(tf.keras.Layers):
+    ''' Mult-Head Self Attention https://arxiv.org/pdf/1706.03762.pdf '''
+    def __init__(self, d_model, num_heads):
+        super(MultiHeadAttention, self).__init__()
+        self.num_heads = num_heads
+        self.d_model = d_model
+        
+        if d_model % num_heads != 0:
+            raise ValueError(
+                "d_model {} must be divisible by num_heads {}".format(d_model, num_heads))
+        
+        # d_k, d_q == d_v, for a vectorised implementation
+        self.d_k = d_model // num_heads
+        
+        # weights to tranform input into query, key and value matricies
+        self.wq = Dense(d_model)
+        self.wk = Dense(d_model)
+        self.wv = Dense(d_model)
+        
+        # transforms Concat(h1,...,h_num_heads) into seq_length X d_model dimensional matrix
+        self.linear = Dense(d_model)
+        
+    def split_heads(self, inputs):
+        '''
+        Split matrix multiple with input from call into inputs for each head
+        inputs => [x, batch_size]
+        converts x shape from (batch_size, seq_length, d_model)
+                           => (batch_size, num_heads, seq_length, d_k)
+        '''
+        x, batch_size = inputs
+        x = tf.reshape(x, (batch_size, -1, self.num_heads, self.d_k))
+        return tf.transpose(x, perm=[0, 2, 1, 3])
+    
+    def call(self, inputs):
+        ''' 
+        Vectorised implementation of Multi Head Self Attention 
+        inputs  => [Query, Key, Value, mask]
+        outputs => [Concat(h1,...., h_n)W_o, attention_weights]
+        '''
+        q, k, v, mask = inputs
+        batch_size = tf.shape(q)[0]
+        
+        # => (batch_size, seq_length, d_model)
+        q = self.wq(q)
+        k = self.wk(k)
+        v = self.wv(v)
+        
+        # => (batch_size, num_heads, seq_length, d_k)
+        q = self.split_heads([q, batch_size])
+        k = self.split_heads([k, batch_size])
+        v = self.split_heads([v, batch_size])
+        
+        # attn => (batch_size, num_heads, seq_length, d_k)
+        # attn_weights => (batch_size, num_heads, seq_length, seq_length)
+        attn, attn_weights = dot_product_attention(q, k, v, mask)
+        
+        # => (batch_size, seq_length, num_heads, d_k)
+        attn = tf.transpose(attn, perm=[0, 2, 1, 3])
+        
+        # => (batch_size, seq_length, d_model)
+        concat_heads = tf.reshape(attn, (batch_size, -1, self.d_model))
+        
+        output = self.linear(concat_heads)
+        
+        return output, attn_weights
+    
+    
+class EncoderLayer(tf.keras.Layer):
+    ''' Single Encoder Layer '''
+    def __init__(self, d_model, num_heads, d_ff, dropout=0.1):
+        super(EncoderLayer, self).__init__()
+        
+        self.attn_layer = MultiHeadAttention(d_model, num_heads)
+        self.mlp = MLP(d_model, d_ff)
+        
+        self.first_layernorm = LayerNormalization(epsilon=1e-6)
+        self.first_dropout   = Dropout(dropout)
+        
+        self.second_layernorm = LayerNormalization(epsilon=1e-6)
+        self.second_dropout   = Dropout(dropout)
+    
+    def call(self, inputs):
+        ''' 
+        Multi Head Self Attention => layernorm => mlp => layernorm 
+        inputs => [x, is_training, mask]
+        '''
+        
+        
+        
+        
+        
+        
+def dot_product_attention(q, k, v, mask):
+    ''' Calculate dot-product attention for Transformers
+        q, k, v should have the same batch size and words per batch
+        mask can be look-ahead or padding which effects its dimesnions
+        
+        Args:
+          q: query shape => (..., m, d_k)
+          k: key shape => (..., m, d_k)
+          v: value shape => (..., m, d_v)
+          mask: float tensor with shape broadcastable 
+                to (..., m, m), defaults to None
+          
+        Returns:
+          output, attention_weights
+    '''
+    # => (batch_size, m, m)
+    q_kt = tf.matmul(q, k, tranpose_b=True)
+    
+    dk = tf.cast(tf.shape(k)[-1], tf.float32)
+    scaled_q_kt = q_kt / tf.math.sqrt(dk)
+    
+    # mask this tensor by multiplying by pad positions by -infinite
+    # so they will be approximately 0 in the softmax
+    if mask is not None:
+        scaled_q_kt += (mask * -1e9)
+    
+    attn_weights = tf.nn.softmax(scaled_q_kt, axis=-1)
+    
+    #> (batch_size, m, d_v)
+    q_kt_v = tf.matmul(scaled_q_kt, v)
+    
+    return q_kt_v, attn_weights
+
+def MLP(d_model, hidden_units):
+    ''' Feed Forward Transformer Layer '''
+    return tf.keras.sequential([Dense(hidden_units),
+                                Dense(d_model)])
+
+def get_angles(pos, i, d_model):
+    angle_freq = 1 / np.power(10000, (2 * (i//2)) / np.float32(d_model))
+    return pos * angle_freq
+
+def positional_encoding(pos, d_model):
+    ''' Get positional embeddings for words at pos 1,...,pos ''' 
+    angle_radians = get_angles(np.arange(pos)[:, np.newaxis],
+                            np.arange(d_model)[np.newaxis, :],
+                            d_model)
+    
+    # Sine at even indices in the array, 2i
+    angle_radians[:, 0::2] = np.sin(angle_radians[:, 0::2])
+    
+    # Cosine at odd indices in the array, 2i+1
+    angle_radians[:, 1::2] = np.cos(angle_radians[:, 1::2])
+      
+    pos_encoding = angle_radians[np.newaxis, ...]
+      
+    return tf.cast(pos_encoding, dtype=tf.float32)
+
+def create_look_ahead_mask(size):
+    ''' Ensure the decoder can only see words it's generated '''
+    mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
+    # => (reply_length, reply_length)
+    return mask  
+
+def create_padding_mask(seq):
+    ''' Return tensor of same shape, with 1 where zero padding value is present, else 0 '''
+    seq = tf.cast(tf.math.equal(seq, 0), tf.float32)
+    
+    # add extra dimensions to add the padding to the attention logits
+    # => (batch_size, 1, 1, seq_len)
+    return seq[:, tf.newaxis, tf.newaxis, :]  
+
 
 def percentile_length(sentences, tokenizer, percentile):
     ''' [["hello how are you ?"], ...] => percentile length of subword encoded strings '''
@@ -115,75 +281,6 @@ def generate_segment_list(encoded, pad_length, sep_index, no_persona=False):
         segment.append(0)
             
     return segment
-
-
-def get_angles(pos, i, d_model):
-    angle_freq = 1 / np.power(10000, (2 * (i//2)) / np.float32(d_model))
-    return pos * angle_freq
-
-def positional_encoding(pos, d_model):
-    ''' Get positional embeddings for words at pos 1,...,pos ''' 
-    angle_radians = get_angles(np.arange(pos)[:, np.newaxis],
-                            np.arange(d_model)[np.newaxis, :],
-                            d_model)
-    
-    # Sine at even indices in the array, 2i
-    angle_radians[:, 0::2] = np.sin(angle_radians[:, 0::2])
-    
-    # Cosine at odd indices in the array, 2i+1
-    angle_radians[:, 1::2] = np.cos(angle_radians[:, 1::2])
-      
-    pos_encoding = angle_radians[np.newaxis, ...]
-      
-    return tf.cast(pos_encoding, dtype=tf.float32)
-
-def create_look_ahead_mask(size):
-    ''' Ensure the decoder can only see words it's generated '''
-    mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
-    # => (reply_length, reply_length)
-    return mask  
-
-def create_padding_mask(seq):
-    ''' Return tensor of same shape, with 1 where zero padding value is present, else 0 '''
-    seq = tf.cast(tf.math.equal(seq, 0), tf.float32)
-    
-    # add extra dimensions to add the padding to the attention logits
-    # => (batch_size, 1, 1, seq_len)
-    return seq[:, tf.newaxis, tf.newaxis, :]  
-
-def dot_product_attention(q, k, v, mask):
-    ''' Calculate dot-product attention for Transformers
-        q, k, v should have the same batch size and words per batch
-        mask can be look-ahead or padding which effects its dimesnions
-        
-        Args:
-          q: query shape => (..., m, d_k)
-          k: key shape => (..., m, d_k)
-          v: value shape => (..., m, d_v)
-          mask: float tensor with shape broadcastable 
-                to (..., m, m), defaults to None
-          
-        Returns:
-          output, attention_weights
-    '''
-    # => (batch_size, m, m)
-    q_kt = tf.matmul(q, k, tranpose_b=True)
-    
-    dk = tf.cast(tf.shape(k)[-1], tf.float32)
-    scaled_q_kt = q_kt / tf.math.sqrt(dk)
-    
-    # mask this tensor by multiplying by pad positions by -infinite
-    # so they will be approximately 0 in the softmax
-    if mask is not None:
-        scaled_q_kt += (mask * -1e9)
-    
-    attn_weights = tf.nn.softmax(scaled_q_kt, axis=-1)
-    
-    #> (batch_size, m, d_v)
-    q_kt_v = tf.matmul(scaled_q_kt, v)
-    
-    return q_kt_v, attn_weights
-
 
     
 

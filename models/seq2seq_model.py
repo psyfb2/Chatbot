@@ -83,10 +83,10 @@ class Decoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs => [input_word, encoder_outputs, context_vec, [h1, c1]
+        inputs => [input_word, encoder_outputs, context_vec, is_training [h1, c1]
         returns => decoder_output, attn_weights, context_vec, h1, c1
         '''
-        input_word, encoder_outputs, context_vec, hidden = inputs
+        input_word, encoder_outputs, context_vec, is_training, hidden = inputs
         h1, c1 = hidden
         
         input_embed = self.embedding(input_word)
@@ -118,7 +118,7 @@ class Decoder(tf.keras.Model):
         # => (batch_size, n_units * 3)
         decoder_output = tf.concat([decoder_output, context_vec], axis=-1)
         
-        decoder_output = Dropout(DROPOUT)(decoder_output )
+        decoder_output = Dropout(DROPOUT)(decoder_output, training=is_training)
         decoder_output = self.out_dense1(decoder_output)
         
         return decoder_output, attn_weights, context_vec, h1, c1
@@ -199,10 +199,10 @@ class DeepDecoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs => [input_word, encoder_outputs, context_vec, [h1, c1, h2, c2, h3, c3, h4, c4]]
+        inputs => [input_word, encoder_outputs, context_vec, is_training [h1, c1, h2, c2, h3, c3, h4, c4]]
         returns => decoder_output, attn_weights, context_vec, h1, c1, h2, c2, h3, c3, h4, c4
         '''
-        input_word, encoder_outputs, context_vec, hidden = inputs
+        input_word, encoder_outputs, context_vec, is_training, hidden = inputs
         h1, c1, h2, c2, h3, c3, h4, c4 = hidden
         
         input_embed = self.embedding(input_word)
@@ -235,7 +235,7 @@ class DeepDecoder(tf.keras.Model):
         # => (batch_size, n_units * 3)
         decoder_output = tf.concat([decoder_output, context_vec], axis=-1)
         
-        decoder_output = Dropout(DROPOUT)(decoder_output )
+        decoder_output = Dropout(DROPOUT)(decoder_output, training=is_training)
         decoder_output = self.out_dense1(decoder_output)
         
         return decoder_output, attn_weights, context_vec, h1, c1, h2, c2, h3, c3, h4, c4
@@ -264,7 +264,7 @@ def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, l
         context_vec = tf.zeros((encoder_outputs.shape[0], encoder_outputs.shape[-1]))
     
         for t in range(1, decoder_target.shape[1]):
-            predictions, _, context_vec, *initial_state = decoder([decoder_input, encoder_outputs, context_vec, initial_state])
+            predictions, _, context_vec, *initial_state = decoder([decoder_input, encoder_outputs, context_vec, False, initial_state])
             
             loss += loss_function(decoder_target[:, t], predictions, loss_object)
             
@@ -293,7 +293,7 @@ def train_step(encoder_input, segment_input, decoder_target, encoder, decoder, l
         
         # Teacher forcing, ground truth for previous word input to the decoder at current timestep
         for t in range(1, decoder_target.shape[1]):
-            predictions, _, context_vec, *initial_state = decoder([decoder_input, encoder_outputs, context_vec, initial_state])
+            predictions, _, context_vec, *initial_state = decoder([decoder_input, encoder_outputs, context_vec, True, initial_state])
             
             loss += loss_function(decoder_target[:, t], predictions, loss_object)
             
@@ -546,6 +546,7 @@ def save_seq2seq(encoder, decoder, deep_lstm):
             tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='input_word'), 
             tf.TensorSpec(shape=[None, None, LSTM_DIM * 2], dtype=tf.float32, name="encoder_output"),
             tf.TensorSpec(shape=[None, LSTM_DIM * 2], dtype=tf.float32, name="context_vec"),
+            tf.TensorSpec(shape=[], dtype=tf.bool, name="is_training"),
             decoder_states_spec
         ]))
     
@@ -586,7 +587,7 @@ def generate_reply_seq2seq(encoder, decoder, tokenizer, input_msg, in_seq_length
     
     reply = []
     for t in range(out_seq_length):
-        softmax_layer, attn_score, context_vec, *initial_state = decoder([decoder_input, encoder_out, context_vec, initial_state])
+        softmax_layer, attn_score, context_vec, *initial_state = decoder([decoder_input, encoder_out, context_vec, False, initial_state])
         
         attn_score = tf.reshape(attn_score, (-1,))
         attn_weights[t] = attn_score.numpy()

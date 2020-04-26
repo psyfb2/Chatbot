@@ -83,10 +83,10 @@ class MultipleDecoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs => [input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, [h1]]
+        inputs => [input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, is_training, [h1]]
         returns => decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1
         '''
-        input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, hidden = inputs
+        input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, is_training, hidden = inputs
         h1 = hidden
         
         input_embed = self.embedding(input_word)
@@ -134,7 +134,7 @@ class MultipleDecoder(tf.keras.Model):
         # => (batch_size, n_units * 5)
         decoder_output = tf.concat([decoder_output, context_vec_concat], axis=-1)
         
-        decoder_output = Dropout(DROPOUT)(decoder_output)
+        decoder_output = Dropout(DROPOUT)(decoder_output, training=is_training)
         decoder_output = self.out_dense1(decoder_output)
         
         return decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1
@@ -240,10 +240,10 @@ class DeepMultipleDecoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs => [input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, [h1, h2, h3, h4]
+        inputs => [input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, is_training, [h1, h2, h3, h4]
         returns => decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1, h2, h3, h4
         '''
-        input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, hidden = inputs
+        input_word, encoder_persona_outputs, encoder_msg_outputs, context_vec_concat, is_training, hidden = inputs
         h1, h2, h3, h4 = hidden
         
         input_embed = self.embedding(input_word)
@@ -294,7 +294,7 @@ class DeepMultipleDecoder(tf.keras.Model):
         # => (batch_size, n_units * 5)
         decoder_output = tf.concat([decoder_output, context_vec_concat], axis=-1)
         
-        decoder_output = Dropout(DROPOUT)(decoder_output )
+        decoder_output = Dropout(DROPOUT)(decoder_output, training=is_training)
         decoder_output = self.out_dense1(decoder_output)
         
         return decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1, h2, h3, h4
@@ -323,7 +323,7 @@ def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, l
         context_vec_concat = tf.zeros((encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states.shape[-1]))
     
         for t in range(1, decoder_target.shape[1]):
-            predictions, _, _, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, initial_state])
+            predictions, _, _, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, False, initial_state])
             
             loss += loss_function(decoder_target[:, t], predictions, loss_object)
             
@@ -352,7 +352,7 @@ def train_step(persona, msg, decoder_target, encoder, decoder, loss_object, toke
         
         # Teacher forcing, ground truth for previous word input to the decoder at current timestep
         for t in range(1, decoder_target.shape[1]):
-            predictions, _, _, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, initial_state])
+            predictions, _, _, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, True, initial_state])
             
             loss += loss_function(decoder_target[:, t], predictions, loss_object)
             
@@ -605,6 +605,7 @@ def save_seq2seq(encoder, decoder, deep_lstm):
             tf.TensorSpec(shape=[None, None, LSTM_DIM * 2], dtype=tf.float32, name="encoder_persona_states"),
             tf.TensorSpec(shape=[None, None, LSTM_DIM * 2], dtype=tf.float32, name="encoder_msg_states"),
             tf.TensorSpec(shape=[None, LSTM_DIM * 4], dtype=tf.float32, name="context_vec_concat"),
+            tf.TensorSpec(shape=[], dtype=tf.bool, name="is_training"),
             decoder_states_spec
         ]))
 
@@ -628,7 +629,7 @@ def generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona, msg, p
     
     reply = []
     for t in range(out_seq_length):
-        softmax_layer, persona_attn_score, msg_attn_score, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, initial_state])
+        softmax_layer, persona_attn_score, msg_attn_score, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, False, initial_state])
         
         persona_attn_score = tf.reshape(persona_attn_score, (-1,))
         persona_attn_weights[t] = persona_attn_score.numpy()
