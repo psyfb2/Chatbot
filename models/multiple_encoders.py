@@ -391,7 +391,7 @@ def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encode
         
             if val_loss < min_val_loss:
                 if save_best_model:
-                    print("Saving model as best val loss decreased from %f to %f" % (min_val_loss, val_loss))
+                    print("Saving model as total best val loss decreased from %f to %f" % (min_val_loss, val_loss))
                     save_seq2seq(encoder, decoder, deep_lstm)
                 no_improvement_counter = 0
                 min_val_loss = val_loss
@@ -403,7 +403,7 @@ def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encode
             print("Epoch %d --- %d sec: Loss %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch))
             
         if epoch + 1 == MIN_EPOCHS:
-            print("Saving model as min epochs %d reached", MIN_EPOCHS)
+            print("Saving model as min epochs %d reached" % MIN_EPOCHS)
             save_seq2seq(encoder, decoder, deep_lstm)
         
         if no_improvement_counter >= PATIENCE and epoch > MIN_EPOCHS:
