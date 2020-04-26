@@ -183,6 +183,8 @@ def dot_product_attention(q, k, v, mask):
     q_kt_v = tf.matmul(scaled_q_kt, v)
     
     return q_kt_v, attn_weights
+
+
     
 
 def train_transformer(BATCH_SIZE):

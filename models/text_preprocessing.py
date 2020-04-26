@@ -23,6 +23,9 @@ GLOVE_FN            = os.path.join(PROJ_PATH, 'data', 'glove.6B.300d.txt')
 MULTIENC_ENCODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_encoders_model')
 MULTIENC_DECODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_decoder_model')
 
+MULTIENC_ENCODER_DEEP_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_encoders_deep_model')
+MULTIENC_DECODER_DEP_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_decoder_deep_model')
+
 SEQ2SEQ_ENCODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_encoder_model')
 SEQ2SEQ_DECODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_decoder_model')
 

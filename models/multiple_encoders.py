@@ -582,14 +582,14 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
 def save_seq2seq(encoder, decoder, deep_lstm):
     ''' Save the encoder and decoder as tensorflow models to file '''
     if deep_lstm:
-        encoder_fn = pre.MUTIENC_ENCODER_MODEL_FN
-        decoder_fn = pre.MUTIENC_DECODER_MODEL_FN
+        encoder_fn = pre.MUTIENC_ENCODER_DEEP_MODEL_FN
+        decoder_fn = pre.MUTIENC_DECODER_DEEP_MODEL_FN
         decoder_states_spec = []
         for i in range(1, 5):
             decoder_states_spec.append(tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='h%d' % i))
     else:
-        encoder_fn = pre.SEQ2SEQ_ENCODER_MODEL_FN
-        decoder_fn = pre.SEQ2SEQ_DECODER_MODEL_FN
+        encoder_fn = pre.MULTIENC_ENCODER_MODEL_FN 
+        decoder_fn = pre.MULTIENC_DECODER_MODEL_FN
         decoder_states_spec = [
             tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='h1')]
         
