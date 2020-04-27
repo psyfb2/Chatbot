@@ -7,7 +7,7 @@ from text_preprocessing import remove_first_num
 from text_preprocessing import remove_contractions
 from text_preprocessing import clean_line
 
-class TestPreprocessing(unittest.TestCase):
+class UnitTests(unittest.TestCase):
     
     def test_remove_first_number(self):
         self.assertEqual(remove_first_num("1 your persona: I am 15"), " your persona: I am 15")
@@ -30,6 +30,6 @@ class TestPreprocessing(unittest.TestCase):
     def test_clean_line(self):
        self.assertEqual(clean_line("blah. blah? blah, blah . blah..."), "blah . blah ? blah , blah . blah . . .")
        self.assertEqual(clean_line("__silence__ yes, it's . &    £AND  maybe."), "__silence__ yes , it is . and maybe .")
-       
+
 if __name__ == "__main__":
     unittest.main()

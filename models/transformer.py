@@ -8,8 +8,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import text_preprocessing as pre
 import tensorflow_datasets as tfds
-from tf.keras.layers import Dense, LayerNormalization, Dropout
+from tensorflow.keras.layers import Dense, LayerNormalization, Dropout, Embedding
 
+# tokens
 SOS = 0
 SEP = 1
 EOS = 2
@@ -17,7 +18,14 @@ EOS = 2
 PSN = 1
 MSG = 2
 
-class MultiHeadAttention(tf.keras.Layers):
+# hyperparameters
+D_MODEL = 1024
+NUM_LAYERS = 6 
+NUM_HEADS = 16
+D_FF = 2048
+
+
+class MultiHeadAttention(tf.keras.layers.Layer):
     ''' Mult-Head Self Attention https://arxiv.org/pdf/1706.03762.pdf '''
     def __init__(self, d_model, num_heads):
         super(MultiHeadAttention, self).__init__()
@@ -84,31 +92,255 @@ class MultiHeadAttention(tf.keras.Layers):
         return output, attn_weights
     
     
-class EncoderLayer(tf.keras.Layer):
-    ''' Single Encoder Layer '''
+class EncoderLayer(tf.keras.layers.Layer):
+    ''' Single Transformer Encoder Layer '''
     def __init__(self, d_model, num_heads, d_ff, dropout=0.1):
         super(EncoderLayer, self).__init__()
         
         self.attn_layer = MultiHeadAttention(d_model, num_heads)
-        self.mlp = MLP(d_model, d_ff)
         
         self.first_layernorm = LayerNormalization(epsilon=1e-6)
         self.first_dropout   = Dropout(dropout)
+        
+        self.mlp = MLP(d_model, d_ff)
         
         self.second_layernorm = LayerNormalization(epsilon=1e-6)
         self.second_dropout   = Dropout(dropout)
     
     def call(self, inputs):
         ''' 
-        Multi Head Self Attention => layernorm => mlp => layernorm 
+        Multi Head Self Attention => layernorm => MLP => layernorm 
         inputs => [x, is_training, mask]
+        output => layer_output
+        mask is for padded values in x
         '''
+        x, is_training, mask = inputs
+        
+        # => (batch_size, seq_length, d_model)
+        attn_out, _ = self.attn_layer([x, x, x, mask])
+        attn_out    = self.first_dropout(attn_out, training=is_training)
+        attn_out    = self.first_layernorm(x + attn_out) # residual connection
+        
+        mlp_out = self.mlp(attn_out)
+        mlp_out = self.second_dropout(mlp_out, training=is_training)
+        layer_output  = self.second_layernorm(attn_out + mlp_out) # residual connection
+        
+        return layer_output
+
+
+class DecoderLayer(tf.keras.layers.Layer):
+    ''' Single Transformer Decoder Layer '''
+    def __init__(self, d_model, num_heads, d_ff, dropout=0.1):
+        super(DecoderLayer, self).__init__()
+        
+        self.self_attn            = MultiHeadAttention(d_model, num_heads)
+        self.encoder_decoder_attn = MultiHeadAttention(d_model, num_heads)
+        
+        self.first_layernorm = LayerNormalization(epsilon=1e-6)
+        self.first_dropout   = Dropout(dropout)
+        
+        self.second_layernorm = LayerNormalization(epsilon=1e-6)
+        self.second_dropout   = Dropout(dropout)
+
+        self.third_layernorm  = LayerNormalization(epsilon=1e-6)
+        self.third_dropout    = Dropout(dropout)
+                
+        self.mlp = MLP(d_model, d_ff)
+    
+    def call(self, inputs):
+        '''
+        Masked Multi Head Self Attention => layernorm 
+        => Multi Head Encoder-Decoder Attention => layernorm 
+        => MLP => layernorm
+        
+        inputs  => [x, encoder_output, is_training, look_ahead_mask, padding_mask]
+        outputs => layer_output, self_attn_weights, ed_attn_weights
+        '''
+        x, encoder_output, is_training, look_ahead_mask, padding_mask = inputs
+        
+        # encoder_output shape => (batch_size, in_seq_length, d_model)
+        
+        # => (batch_size, out_seq_length, d_model)
+        self_attn_out, self_attn_weights = self.self_attn([x, x, x, look_ahead_mask])
+        self_attn_out = self.first_dropout(self_attn_out, training=is_training)
+        out1 = self.first_layernorm(self_attn_out + x)
+        
+        # => (batch_size, out_seq_length, d_model)
+        ed_attn_out, ed_attn_weights = self.encoder_decoder_attn([out1,
+                                                                  encoder_output, 
+                                                                  encoder_output,
+                                                                 padding_mask])
+        ed_attn_out = self.second_dropout(ed_attn_out, training=is_training)
+        out2 = self.second_layernorm(ed_attn_out + out1)
+        
+        mlp_out = self.mlp(out2)
+        mlp_out = self.third_dropout(mlp_out, training=is_training)
+        
+        # => (batch_size, out_seq_length, d_model)
+        layer_output = self.third_layernorm(mlp_out + out2)
+        
+        return layer_output, self_attn_weights, ed_attn_weights
+
+
+class Encoder(tf.keras.layers.Layer):
+    ''' Stacks N Transformer Encoder Layers '''
+    def __init__(self, num_layers, d_model, num_heads, d_ff, embedding,
+                 max_pos, use_segment_embedding, dropout=0.1):
+        super(Encoder, self).__init__()
+        
+        self.num_layers = num_layers
+        self.d_model = d_model
         
         
+        self.embedding = embedding
+        self.pos_encoding = positional_encoding(max_pos, d_model)
+        # segment embedding are used so that this model can
+        # better distinguish between persona and message segments
+        # segment embeddings should be padded
+        if use_segment_embedding:
+            # segment_embedding_dim must be the same as output_dim of word embedding
+            self.segment_embedding = Embedding(3, d_model, trainable=True, name="segment_embedding")
+        else:
+            # use a zero segment embedding which will have no effect on the model
+            self.segment_embedding = Embedding(3, d_model, 
+                                               weights=[np.zeros((3, d_model))], 
+                                               trainable=False,
+                                               name="segment_embedding")
+        
+        self.encoder_layers = [EncoderLayer(d_model, num_heads, d_ff, dropout)
+                               for _ in range(num_layers)]
+        
+        self.dropout = Dropout(dropout)
+    
+    def call(self, inputs):
+        '''
+        Performs N layers of Multi-Head Self Attention
+        inputs => [x, segment, is_training, mask]
+        output => output
+        x shape       => (batch_size, in_seq_length)
+        segment shape => (batch_size, in_seq_length)
+        output shape  => (batch_size, in_seq_length, d_model)
+        '''
+        x, segment, is_training, mask = inputs
+        in_seq_length = tf.shape(x)[1]
+        
+        # word embedding + positional embedding + segment embedding
+        x = self.embedding(x)
+        # multiply embedding by sqrt of dimension https://arxiv.org/pdf/1608.05859.pdf
+        x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
+        x = tf.add(x, self.pos_encoding[:, in_seq_length, :])
+        x = tf.add(x, self.segment_embedding(segment))
+        
+        x = self.dropout(x, training=is_training)
+        
+        for i in range(self.num_layers):
+            x = self.encoder_layers[i]([x, is_training, mask])
+        
+        return x
+
+
+class Decoder(tf.keras.layers.Layer):
+    ''' Stacks N Transformer Decoder Layers '''
+    def __init__(self, num_layers, d_model, num_heads, d_ff,
+                 embedding, max_pos, dropout=0.1):
+        super(Decoder, self).__init__()
+        
+        self.num_layers = num_layers
+        self.d_model = d_model
+        
+        # no segment embedding needed for Decoder
+        self.embedding = embedding
+        self.pos_encoding = positional_encoding(max_pos, d_model)
+        
+        self.decoder_layers = [DecoderLayer(d_model, num_heads, d_ff, dropout)
+                               for _ in range(num_layers)]
+        
+        self.dropout = Dropout(dropout)
+
+    def call(self, inputs):
+        ''' 
+        inputs  => [x, encoder_out, is_training, look_ahead_mask, padding_mask]
+        outputs => output, attn_weights
+        x shape      => (batch_size, out_seq_length)
+        output shape => (batch_size, out_seq_length, d_model)
+        
+        attn_weights is dictionary 
+        {'self_attn0' : self attention weights, 
+         'ed_attn0' : encoder decoder attention weights, ... layer N}
+        '''
+        x, encoder_out, is_training, look_ahead_mask, padding_mask = inputs
+        
+        out_seq_length = tf.shape(x)[1]
+        attn_weights = {}
+        
+        x = self.embedding(x)
+        x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
+        x = tf.add(x, self.pos_encoding[:, :out_seq_length, :])
+        
+        x = self.dropout(x, training=is_training)
+        
+        for i in range(self.num_layers):
+            x, self_attn, ed_attn = self.decoder_layers[i]([x, encoder_out,
+                                                            is_training, look_ahead_mask,
+                                                            padding_mask])
+            attn_weights['self_attn{}'.format(i)] = self_attn
+            attn_weights['ed_attn{}'.format(i)]   = ed_attn
+        
+        return x, attn_weights
+    
+ 
+class Transformer(tf.keras.Model):
+    ''' Q&A Transformer https://arxiv.org/pdf/1706.03762.pdf '''
+    def __init__(self, d_model, num_layers, num_heads, d_ff, 
+                 input_max_pos, output_max_pos, vocab_size,
+                 tied_embedding, use_segment_embedding, dropout=0.1):
+        super(Transformer, self).__init__()
+        
+        self.encoder = Encoder(num_layers, d_model, num_heads, d_ff, 
+                               tied_embedding, input_max_pos, use_segment_embedding,
+                               dropout)
+        self.decoder = Decoder(num_layers, d_model, num_heads, d_ff, 
+                               tied_embedding, output_max_pos, dropout)
+        
+        self.output_layer = Dense(vocab_size)
+    
+    @tf.function
+    def call(self, inputs):
+        ''' 
+        One Transformer Forward Pass
+        inputs  => [msg, segment, reply, is_training, enc_mask, look_ahead_mask, dec_mask]
+        outputs => output, attn_dict
+        
+        reply is sentence generated so far
+        msg shape     => (batch_size, in_seq_length)
+        segment shape => (batch_size, in_seq_length)
+        reply shape   => (batch_size, out_seq_length)
+        output shape  => (batch_size, out_seq_length, vocab_size)
+        '''
+        msg, segment, reply, is_training, enc_mask, look_ahead_mask, dec_mask = inputs
+        
+        encoder_output = self.encoder([msg, segment, is_training, enc_mask])
+        
+        decoder_output, attn_dict = self.decoder([reply, encoder_output, 
+                                                  is_training, look_ahead_mask, 
+                                                  dec_mask])
+        output = self.output_layer(decoder_output)
+        
+        return output, attn_dict
+
+class TransformerSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+    ''' Learning rate scheduler for Adam https://arxiv.org/pdf/1706.03762.pdf '''
+    def __init__(self, d_model, warmup_steps=4000):
+        super(TransformerSchedule, self).__init__()
+        self.d_model = tf.cast(d_model, dtype=tf.float32)
+        self.warmup_steps = warmup_steps
+    
+    def __call__(self, step):
+        return (tf.math.rsqrt(self.d_model) * tf.math.minimum(
+            tf.math.rsqrt(step), step * (self.warmup_steps ** -1.5)))
         
         
-        
-        
+    
 def dot_product_attention(q, k, v, mask):
     ''' Calculate dot-product attention for Transformers
         q, k, v should have the same batch size and words per batch
@@ -125,7 +357,7 @@ def dot_product_attention(q, k, v, mask):
           output, attention_weights
     '''
     # => (batch_size, m, m)
-    q_kt = tf.matmul(q, k, tranpose_b=True)
+    q_kt = tf.matmul(q, k, transpose_b=True)
     
     dk = tf.cast(tf.shape(k)[-1], tf.float32)
     scaled_q_kt = q_kt / tf.math.sqrt(dk)
@@ -144,7 +376,7 @@ def dot_product_attention(q, k, v, mask):
 
 def MLP(d_model, hidden_units):
     ''' Feed Forward Transformer Layer '''
-    return tf.keras.sequential([Dense(hidden_units),
+    return tf.keras.Sequential([Dense(hidden_units),
                                 Dense(d_model)])
 
 def get_angles(pos, i, d_model):
@@ -282,15 +514,17 @@ def generate_segment_list(encoded, pad_length, sep_index, no_persona=False):
             
     return segment
 
-    
 
 def train_transformer(BATCH_SIZE):
     tokenizer, in_seq_length, out_seq_length = create_subword_tokenizer()
+    # +3 for SOS, SEP, EOS tokens
+    vocab_size = tokenizer.vocab_size + 3
     sample_str = "optimus prime goodness"
     assert tokenizer.decode(tokenizer.encode(sample_str)) == sample_str
     
     print("Input Length: %d " % in_seq_length)
     print("Output Length: %d" % out_seq_length)
+    print("Vocab Size: %d" % vocab_size)
     
     BUFFER_SIZE = 15000
     
@@ -311,13 +545,8 @@ def train_transformer(BATCH_SIZE):
     
     
     
-    
-    
-    
-    
-    
 
-train_transformer(64)
+#train_transformer(64)
 
 '''
     # ------ Pretrain on Movie dataset ------ #
@@ -422,3 +651,75 @@ train_transformer(64)
         print("Reply:", reply + "\n")
     # ------ ------ #
 '''
+
+if __name__ == "__main__":
+    # do some tests to ensure Encoder and Decoder have correct dimensionality
+    
+    # ------ Encoder Layer ------ #
+    encoder_layer = EncoderLayer(1024, 16, 2048)
+    encoder_in_shape = (128, 105, 1024)
+
+    encoder_out = encoder_layer([
+        tf.random.uniform(encoder_in_shape), False, None])
+    
+    assert encoder_out.shape == encoder_in_shape
+    # ------ ------ #
+        
+    # ------ Decoder Layer ------ #
+    decoder_layer = DecoderLayer(1024, 16, 2048)
+    decoder_in_shape = (128, 21, 1024)
+    decoder_out, self_attn_weights, de_attn_weights = decoder_layer([
+        tf.random.uniform(decoder_in_shape), encoder_out, 
+        False, None, None])
+    
+    assert decoder_out.shape == decoder_in_shape
+    
+    assert self_attn_weights.shape == (decoder_in_shape[0], 
+                                 16,
+                                 decoder_in_shape[1], 
+                                 decoder_in_shape[1])
+    
+    assert de_attn_weights.shape == (decoder_in_shape[0],
+                               16,
+                               decoder_in_shape[1], 
+                               encoder_in_shape[1])
+    # ------ ------ #
+    
+    # ------ Encoder ------ #
+    encoder_embedding = Embedding(8136, 512)
+    encoder = Encoder(6, 512, 8, 2048, encoder_embedding, 10000, True)
+    encoder_in_shape = (32, 102)
+    
+    encoder_input = tf.random.uniform(encoder_in_shape, dtype=tf.int64, minval=0, maxval=8000)
+    segment_input = tf.random.uniform(encoder_in_shape, dtype=tf.int64, minval=0, maxval=2)
+    encoder_out = encoder([encoder_input, segment_input, False, None])
+    
+    assert encoder_out.shape == (encoder_in_shape[0], encoder_in_shape[1], 512)
+    # ------ ------ #
+    
+    # ------ Decoder ------ #
+    decoder = Decoder(6, 512, 8, 2048, encoder_embedding, 5000)
+    decoder_in_shape = (32, 25)
+    decoder_input = tf.random.uniform(decoder_in_shape, dtype=tf.int64, minval=0, maxval=8000)
+
+    output, attn_dict = decoder([decoder_input, encoder_out, False, None, None])
+    
+    assert output.shape == (decoder_in_shape[0], decoder_in_shape[1], 512)
+    assert attn_dict['ed_attn5'].shape == (decoder_in_shape[0], 8, decoder_in_shape[1], 
+                                           encoder_in_shape[1])
+    # ------ ------ #
+    
+    # ------ Transformer ------ #
+    tied_embedding = Embedding(8136, 1024)
+    optimus_prime = Transformer(1024, 6, 16, 2048, 10000, 5000, 
+                                     8136, tied_embedding, True)
+
+    msg   = tf.random.uniform((128, 92), dtype=tf.int64, minval=0, maxval=8135)
+    seg   = tf.random.uniform((128, 92), dtype=tf.int64, minval=0, maxval=2)
+    reply = tf.random.uniform((128, 25), dtype=tf.int64, minval=0, maxval=8135)
+    
+    out, _ = optimus_prime([msg, seg, reply, False, None, None, None])
+    
+    assert out.shape == (128, 25, 8136)
+    # ------ ------ #
+    
