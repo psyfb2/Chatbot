@@ -23,6 +23,15 @@ D_MODEL = 1024
 NUM_LAYERS = 6 
 NUM_HEADS = 16
 D_FF = 2048
+DROPOUT = 0.1
+USE_SEG_EMBEDDING = True
+
+# globals
+loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True,
+                                                            reduction='none')
+train_loss = tf.keras.metrics.Mean(name='train_loss')
+train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
+transformer = None
 
 
 class MultiHeadAttention(tf.keras.layers.Layer):
@@ -293,8 +302,10 @@ class Transformer(tf.keras.Model):
     ''' Q&A Transformer https://arxiv.org/pdf/1706.03762.pdf '''
     def __init__(self, d_model, num_layers, num_heads, d_ff, 
                  input_max_pos, output_max_pos, vocab_size,
-                 tied_embedding, use_segment_embedding, dropout=0.1):
+                 use_segment_embedding, dropout=0.1):
         super(Transformer, self).__init__()
+        
+        tied_embedding = Embedding(vocab_size, d_model)
         
         self.encoder = Encoder(num_layers, d_model, num_heads, d_ff, 
                                tied_embedding, input_max_pos, use_segment_embedding,
@@ -338,9 +349,17 @@ class TransformerSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __call__(self, step):
         return (tf.math.rsqrt(self.d_model) * tf.math.minimum(
             tf.math.rsqrt(step), step * (self.warmup_steps ** -1.5)))
-        
-        
+
+def loss_function(label, pred):
+    mask = tf.math.logial_not(tf.math.equal(label, 0))
+    loss = loss_object(label, pred)
     
+    mask = tf.cast(mask, dtype=loss.dtype)
+    loss *= mask
+    
+    return tf.reduce_sum(loss) / tf.reduce_sum(mask)
+
+
 def dot_product_attention(q, k, v, mask):
     ''' Calculate dot-product attention for Transformers
         q, k, v should have the same batch size and words per batch
@@ -413,6 +432,21 @@ def create_padding_mask(seq):
     # => (batch_size, 1, 1, seq_len)
     return seq[:, tf.newaxis, tf.newaxis, :]  
 
+def create_masks(msg_seq, reply_seq):
+    # mask for encoder self attention so it
+    # doesn't consider pad values
+    encoder_padding = create_padding_mask(msg_seq)
+    
+    # mask for encoder output, used in encoder_decoder attention
+    decoder_padding = create_padding_mask(msg_seq)
+    
+    # mask for decoder self attention so it
+    # doesn't consider pad values for future predictions
+    look_ahead_mask = create_look_ahead_mask(tf.shape(reply_seq)[1])
+    output_mask     = create_padding_mask(reply_seq)
+    look_ahead_mask = tf.maximum(output_mask, look_ahead_mask)
+    
+    return encoder_padding, look_ahead_mask, decoder_padding
 
 def percentile_length(sentences, tokenizer, percentile):
     ''' [["hello how are you ?"], ...] => percentile length of subword encoded strings '''
@@ -516,6 +550,8 @@ def generate_segment_list(encoded, pad_length, sep_index, no_persona=False):
 
 
 def train_transformer(BATCH_SIZE):
+    global transformer
+    
     tokenizer, in_seq_length, out_seq_length = create_subword_tokenizer()
     # +3 for SOS, SEP, EOS tokens
     vocab_size = tokenizer.vocab_size + 3
@@ -533,7 +569,7 @@ def train_transformer(BATCH_SIZE):
     movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
     
     raw = movie_conversations[:20, 0]
-    #movie_conversations = None
+    movie_conversations = None
     
     # integer encode sequences
     encoder_input, decoder_target = encode_training_examples(None, movie_conversations, tokenizer, in_seq_length, out_seq_length)
@@ -542,6 +578,12 @@ def train_transformer(BATCH_SIZE):
     dataset = tf.data.Dataset.from_tensor_slices(
         (encoder_input, segment_input, decoder_target)).cache().shuffle(BUFFER_SIZE)
     dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    
+    encoder_input, decoder_target, segment_input = None, None, None
+    
+    transformer = Transformer(D_MODEL, NUM_LAYERS, NUM_HEADS, D_FF,
+                              vocab_size, vocab_size, vocab_size, 
+                              USE_SEG_EMBEDDING, DROPOUT)
     
     
     
