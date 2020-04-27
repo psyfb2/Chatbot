@@ -32,6 +32,8 @@ SEQ2SEQ_DECODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_d
 SEQ2SEQ_ENCODER_DEEP_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_encoder_deep_model')
 SEQ2SEQ_DECODER_DEEP_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_decoder_deep_model')
 
+TRANSFORMER_CHECKPOINT_PATH = os.path.join(PROJ_PATH, 'saved_models', 'transformer_checkpoints')
+
 AUTOENC_MODEL_IMAGE_FN      = os.path.join(PROJ_PATH, 'saved_models', 'autoenc.png')
 AUTOENC_MODEL_FN            = os.path.join(PROJ_PATH, 'saved_models', 'autoenc.h5')
 

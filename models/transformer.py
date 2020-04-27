@@ -2,13 +2,13 @@
 """
 @author: Fady Benattayallah
 """
-import time
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 import text_preprocessing as pre
 import tensorflow_datasets as tfds
 from tensorflow.keras.layers import Dense, LayerNormalization, Dropout, Embedding
+from time import time
 
 # tokens
 SOS = 0
@@ -32,6 +32,9 @@ loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True,
 train_loss = tf.keras.metrics.Mean(name='train_loss')
 train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
 transformer = None
+checkpoint = None
+checkpoint_manage = None
+optimizer = None
 
 
 class MultiHeadAttention(tf.keras.layers.Layer):
@@ -351,7 +354,7 @@ class TransformerSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
             tf.math.rsqrt(step), step * (self.warmup_steps ** -1.5)))
 
 def loss_function(label, pred):
-    mask = tf.math.logial_not(tf.math.equal(label, 0))
+    mask = tf.math.logical_not(tf.math.equal(label, 0))
     loss = loss_object(label, pred)
     
     mask = tf.cast(mask, dtype=loss.dtype)
@@ -548,9 +551,60 @@ def generate_segment_list(encoded, pad_length, sep_index, no_persona=False):
             
     return segment
 
+@tf.function(input_signature=[
+    tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+def train_step(msg_batch, seg_batch, reply_batch):
+    # use teacher forcing by passing Transformer the ground truth
+    # as as the reply input
+    reply_input_batch  = reply_batch[:, :-1]
+    reply_target_batch = reply_batch[:, 1:]
+    
+    encoder_mask, look_ahead_mask, decoder_mask = create_masks(msg_batch, 
+                                                               reply_input_batch)
+    
+    with tf.GradientTape() as tape:
+        generated_sentences, _ = transformer([msg_batch, seg_batch, 
+                                             reply_input_batch, True,
+                                             encoder_mask, look_ahead_mask,
+                                             decoder_mask])
+        loss = loss_function(reply_target_batch, generated_sentences)
+        
+    gradients = tape.gradient(loss, transformer.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
+    
+    train_loss(loss)
+    train_accuracy(loss)
 
+
+def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
+    for epoch in range(EPOCHS):
+        elapsed = time()
+        train_loss.reset_states()
+        train_accuracy.reset_states()
+        
+        for(batch, (msg, seg, reply)) in enumerate(dataset):
+            train_step(msg, seg, reply)
+            
+            if pre.VERBOSE == 1:
+                print("Epoch %d: Batch %d: Loss %f, Accuracy %f" %
+                      (epoch + 1, batch, train_loss.result(), train_accuracy.result()))
+            
+        if (epoch + 1) % 10 == 0:
+            # checkpoint model every 10 epochs
+            save_path = checkpoint_manager.save()
+            print("Epoch %d: Checkpoint saved at %s" % (epoch + 1, save_path))
+        
+        print("Epoch %d --- %d sec: Loss %f, Accuracy %f" % (epoch + 1, 
+                                                             time() - elapsed,
+                                                             train_loss.result(),
+                                                             train_accuracy.result()))
 def train_transformer(BATCH_SIZE):
     global transformer
+    global checkpoint
+    global checkpoint_manager
+    global optimizer
     
     tokenizer, in_seq_length, out_seq_length = create_subword_tokenizer()
     # +3 for SOS, SEP, EOS tokens
@@ -567,9 +621,10 @@ def train_transformer(BATCH_SIZE):
     # ------ Pretrain on Movie dataset ------ #
     movie_epochs = 15
     movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
+    movie_conversations = movie_conversations[:4, :]######
+    pre.VERBOSE = 1
     
     raw = movie_conversations[:20, 0]
-    movie_conversations = None
     
     # integer encode sequences
     encoder_input, decoder_target = encode_training_examples(None, movie_conversations, tokenizer, in_seq_length, out_seq_length)
@@ -577,18 +632,35 @@ def train_transformer(BATCH_SIZE):
     
     dataset = tf.data.Dataset.from_tensor_slices(
         (encoder_input, segment_input, decoder_target)).cache().shuffle(BUFFER_SIZE)
-    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+    dataset = dataset.batch(BATCH_SIZE)
     
+    movie_conversations = None
     encoder_input, decoder_target, segment_input = None, None, None
     
     transformer = Transformer(D_MODEL, NUM_LAYERS, NUM_HEADS, D_FF,
                               vocab_size, vocab_size, vocab_size, 
                               USE_SEG_EMBEDDING, DROPOUT)
     
+    optimizer = tf.keras.optimizers.Adam(TransformerSchedule(D_MODEL), 
+                                         beta_1=0.9, beta_2=0.98, 
+                                         epsilon=1e-9)
+    
+    # use checkpoints to retrain model from the last checkpoint
+    # in-case more training is needed
+    checkpoint = tf.train.Checkpoint(transformer=transformer,
+                                     optimizer=optimizer)
+    
+    checkpoint_manager = tf.train.CheckpointManager(checkpoint, 
+                                                    pre.TRANSFORMER_CHECKPOINT_PATH,
+                                                    max_to_keep=3)
+    
+    train(dataset, None, 10, 10, 10)
+    
+    
     
     
 
-#train_transformer(64)
+train_transformer(2)
 
 '''
     # ------ Pretrain on Movie dataset ------ #
@@ -754,7 +826,7 @@ if __name__ == "__main__":
     # ------ Transformer ------ #
     tied_embedding = Embedding(8136, 1024)
     optimus_prime = Transformer(1024, 6, 16, 2048, 10000, 5000, 
-                                     8136, tied_embedding, True)
+                                     8136, True)
 
     msg   = tf.random.uniform((128, 92), dtype=tf.int64, minval=0, maxval=8135)
     seg   = tf.random.uniform((128, 92), dtype=tf.int64, minval=0, maxval=2)
