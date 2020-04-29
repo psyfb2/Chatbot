@@ -89,6 +89,9 @@ if __name__ == '__main__':
     parser.add_argument("--segment_embedding", default=True, type=str2bool,
                         help="Whether or not to add an additional segment embedding to seq2seq models so that it can better distiguish persona from message. Only applies to seq2seq and deep_seq2seq, default = True")
     
+    parser.add_argument("--perform_pretraining", default=True, type=str2bool,
+                        help="Perform pretraining on movie, dialy dialog datasets? default = True")
+    
     parser.add_argument("--verbose", default=1, type=int,
                         help="Display loss for each batch during training, default = 0")
     
@@ -145,18 +148,20 @@ if __name__ == '__main__':
         elif args.train == model_choices[1]:
             seq2seq.train_seq2seq(
                 args.epochs, args.batch_size, args.early_stopping_patience, 
-                args.min_epochs, deep_lstm=False, use_segment_embedding=args.segment_embedding)
+                args.min_epochs, deep_lstm=False, use_segment_embedding=args.segment_embedding,
+                pre_train=args.perform_pretraining)
             
         elif args.train == model_choices[2]:
             seq2seq.train_seq2seq(
                 args.epochs, args.batch_size, args.early_stopping_patience, 
-                args.min_epochs, deep_lstm=True, use_segment_embedding=args.segment_embedding)
+                args.min_epochs, deep_lstm=True, use_segment_embedding=args.segment_embedding,
+                pre_train=args.perform_pretraining)
             
         elif args.train == model_choices[3]:
-            multenc.train_multiple_encoders(args.epochs, args.batch_size, args.early_stopping_patience, args.min_epochs ,deep_lstm=False)
+            multenc.train_multiple_encoders(args.epochs, args.batch_size, args.early_stopping_patience, args.min_epochs ,deep_lstm=False, pre_train=args.perform_pretraining)
         
         elif args.train == model_choices[4]:
-            multenc.train_multiple_encoders(args.epochs, args.batch_size, args.early_stopping_patience, args.min_epochs, deep_lstm=True)
+            multenc.train_multiple_encoders(args.epochs, args.batch_size, args.early_stopping_patience, args.min_epochs, deep_lstm=True, pre_train=args.perform_pretraining)
         
         elif args.train == model_choices[5]:
             pass

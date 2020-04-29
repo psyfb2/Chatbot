@@ -358,7 +358,7 @@ def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encode
     return EPOCHS   
             
 
-def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use_segment_embedding=True):
+def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use_segment_embedding=True, pre_train=True):
     vocab, persona_length, msg_length, reply_length = pre.get_vocab()
     tokenizer = pre.fit_tokenizer(vocab)
     vocab_size = len(tokenizer.word_index) + 1
@@ -369,29 +369,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
     print('Output sequence length: %d' % reply_length)
     
     BUFFER_SIZE = 15000
-
-    # ------ Pretrain on Movie dataset ------ #
-    movie_epochs = 15
-    movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
     
-    encoder_input  = movie_conversations[:, 0]
-    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
-    
-    movie_conversations = None
-    
-    raw = encoder_input[:20]
-
-    # integer encode training data
-    segment_input  = np.array([pre.generate_segment_array(msg,  persona_length + msg_length, no_persona=True) for msg in encoder_input])
-    encoder_input  = pre.encode_sequences(tokenizer, persona_length + msg_length, encoder_input)
-    decoder_target = pre.encode_sequences(tokenizer, reply_length, decoder_target)
-    
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, segment_input,  decoder_target)).shuffle(BUFFER_SIZE)
-    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
-    batches_per_epoch = len(encoder_input) // BATCH_SIZE
-    
-    encoder_input, segment_input, decoder_target = None, None, None
-
     # load GloVe embeddings, make the embeddings for encoder and decoder tied https://www.aclweb.org/anthology/E17-2025.pdf
     embedding_matrix = pre.load_glove_embedding(tokenizer, pre.GLOVE_FN)
     e_dim = embedding_matrix.shape[1]
@@ -405,53 +383,75 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
         decoder = Decoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
     
     optimizer = Adam(clipnorm=CLIP_NORM)
-    # will give labels as integers instead of one-hot so use sparse CCE
     loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
 
-    movie_epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, 0, PATIENCE)
+    if pre_train:
+        # ------ Pretrain on Movie dataset ------ #
+        movie_epochs = 15
+        movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
+        
+        encoder_input  = movie_conversations[:, 0]
+        decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
+        
+        movie_conversations = None
+        
+        raw = encoder_input[:20]
     
-    print("Finished Pre-training on Cornell Movie Dataset for %d epochs" % movie_epochs)
+        # integer encode training data
+        segment_input  = np.array([pre.generate_segment_array(msg,  persona_length + msg_length, no_persona=True) for msg in encoder_input])
+        encoder_input  = pre.encode_sequences(tokenizer, persona_length + msg_length, encoder_input)
+        decoder_target = pre.encode_sequences(tokenizer, reply_length, decoder_target)
+        
+        dataset = tf.data.Dataset.from_tensor_slices((encoder_input, segment_input,  decoder_target)).shuffle(BUFFER_SIZE)
+        dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+        batches_per_epoch = len(encoder_input) // BATCH_SIZE
+        
+        encoder_input, segment_input, decoder_target = None, None, None
     
-    # do some dummy text generation
-    for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], persona_length + msg_length, reply_length)
-        print("Message:", raw[i])
-        print("Reply:", reply + "\n")
-    # ------ ------ #
-
+        movie_epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, 0, PATIENCE)
+        
+        print("Finished Pre-training on Cornell Movie Dataset for %d epochs" % movie_epochs)
+        
+        # do some dummy text generation
+        for i in range(len(raw)):
+            reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], persona_length + msg_length, reply_length)
+            print("Message:", raw[i])
+            print("Reply:", reply + "\n")
+        # ------ ------ #
     
-    # ------ Pretrain on Daily Dialogue ------ #
-    daily_epochs = 15
-    conversations = pre.load_dailydialogue_dataset()
-    
-    encoder_input  = conversations[:, 0]
-    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
-    
-    conversations = None
-    
-    raw = encoder_input[:20]
-    
-    # integer encode training data
-    segment_input  = np.array([pre.generate_segment_array(msg, persona_length + msg_length, no_persona=True) for msg in encoder_input])
-    encoder_input  = pre.encode_sequences(tokenizer, persona_length + msg_length, encoder_input)
-    decoder_target = pre.encode_sequences(tokenizer, reply_length, decoder_target)
-    
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, segment_input,  decoder_target)).shuffle(BUFFER_SIZE)
-    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
-    batches_per_epoch = len(encoder_input) // BATCH_SIZE
-    
-    encoder_input, segment_input, decoder_target = None, None, None
-    
-    daily_epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, 0, PATIENCE)
-    
-    print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
-    
-    # do some dummy text generation
-    for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], persona_length + msg_length, reply_length)
-        print("Message:", raw[i])
-        print("Reply:", reply + "\n")
-    # ------ ------ #
+        
+        # ------ Pretrain on Daily Dialogue ------ #
+        daily_epochs = 15
+        conversations = pre.load_dailydialogue_dataset()
+        
+        encoder_input  = conversations[:, 0]
+        decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
+        
+        conversations = None
+        
+        raw = encoder_input[:20]
+        
+        # integer encode training data
+        segment_input  = np.array([pre.generate_segment_array(msg, persona_length + msg_length, no_persona=True) for msg in encoder_input])
+        encoder_input  = pre.encode_sequences(tokenizer, persona_length + msg_length, encoder_input)
+        decoder_target = pre.encode_sequences(tokenizer, reply_length, decoder_target)
+        
+        dataset = tf.data.Dataset.from_tensor_slices((encoder_input, segment_input,  decoder_target)).shuffle(BUFFER_SIZE)
+        dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+        batches_per_epoch = len(encoder_input) // BATCH_SIZE
+        
+        encoder_input, segment_input, decoder_target = None, None, None
+        
+        daily_epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, 0, PATIENCE)
+        
+        print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
+        
+        # do some dummy text generation
+        for i in range(len(raw)):
+            reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], persona_length + msg_length, reply_length)
+            print("Message:", raw[i])
+            print("Reply:", reply + "\n")
+        # ------ ------ #
     
 
     # ------ Train on PERSONA-CHAT ------ #

@@ -319,14 +319,6 @@ class Transformer(tf.keras.Model):
         
         self.output_layer = Dense(vocab_size)
     
-    @tf.function(input_signature=[[
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=[], dtype=tf.bool),
-        tf.TensorSpec(shape=(None, 1, 1, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, 1, None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, 1, 1, None), dtype=tf.float32)]])
     def call(self, inputs):
         ''' 
         One Transformer Forward Pass
@@ -347,8 +339,8 @@ class Transformer(tf.keras.Model):
                                                   is_training, look_ahead_mask, 
                                                   dec_mask])
         output = self.output_layer(decoder_output)
-        ##############################################################################
-        return output, output
+
+        return output, attn_dict
 
 class TransformerSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     ''' Learning rate scheduler for Adam https://arxiv.org/pdf/1706.03762.pdf '''
@@ -631,19 +623,14 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
             val_loss_result = val_loss.result()
             
             if val_loss_result < min_val_loss:
-                print("Saving graph as best val loss decreased from %f to %f" % 
+                save_path = checkpoint_manager.save()
+                print("best val loss decreased from %f to %f" % 
                       (min_val_loss, val_loss_result))
-                save_transformer()
+                print("Transformer checkpoint saved: %s" % save_path)
                 no_improvement_counter = 0
                 min_val_loss = val_loss_result
             else:
-                no_improvement_counter += 1
-        
-        # checkpoint and print results
-        if (epoch + 1) % 10 == 0:
-            # checkpoint model every 10 epochs
-            save_path = checkpoint_manager.save()
-            print("Epoch %d: Checkpoint saved at %s" % (epoch + 1, save_path))
+                no_improvement_counter += 1            
         
         if val_dataset != None:
             print("Epoch %d --- %d sec: Loss %f, Accuracy %f, Val Loss %f" % (epoch + 1, 
@@ -658,8 +645,9 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
                                                                  train_accuracy.result()))
         # early stopping
         if epoch + 1 == MIN_EPOCHS:
-            print("Saving model as min epochs %d reached" % MIN_EPOCHS)
-            save_transformer()
+            save_path = checkpoint_manager.save()
+            print("min epochs %d reached" % MIN_EPOCHS)
+            print("Transformer checkpoint saved: %s" % save_path)
             
         if no_improvement_counter >= PATIENCE and epoch > MIN_EPOCHS:
             print("Early stopping, no improvement over minimum in %d epochs" % PATIENCE)
@@ -733,9 +721,12 @@ def train_transformer(BATCH_SIZE):
         print("Message:", raw[i])
         print("reply", reply)
         
-    # save the model in a tf graph
+    tokenizer.save_to_file(pre.TRANSFORMER_TOKENIZER_FN)
     
-    transformer = tf.saved_model.load(pre.TRANSFORMER_MODEL_FN)
+    transformer = None
+    optimizer = None
+    
+    transformer, _, _ = load_saved_transformer(vocab_size)
     
     # do some dummy text generation
     for i in range(len(raw)):
@@ -744,21 +735,43 @@ def train_transformer(BATCH_SIZE):
         print("Message:", raw[i])
         print("reply", reply)
     
+def load_saved_transformer(vocab_size):
+    ''' Loads Transformer, it's subword tokenizer from file and max reply length '''
+    '''
+    try:
+        tokenizer = tfds.features.text.SubwordTextEncoder.load_from_file(
+            pre.TRANSFORMER_TOKENIZER_FN)
+    except Exception:
+        print("Couldn't load tokenizer from file %s" % pre.TRANSFORMER_TOKENIZER_FN)
+        print("Recreating subword tokenizer model")
+        tokenizer, _, _ = create_subword_tokenizer()
     
-def save_transformer():
-    tf.saved_model.save(transformer, pre.TRANSFORMER_MODEL_FN, signatures=transformer.call.get_concrete_function(
-    [
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-        tf.TensorSpec(shape=[], dtype=tf.bool),
-        tf.TensorSpec(shape=(None, 1, 1, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, 1, None, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(None, 1, 1, None), dtype=tf.float32)
-    ]))
-
+    vocab_size = tokenizer.vocab_size + 3
+    max_reply_length = 24
+    '''
+            
+    transformer = Transformer(D_MODEL, NUM_LAYERS, NUM_HEADS, D_FF,
+                              vocab_size, vocab_size, vocab_size, 
+                              USE_SEG_EMBEDDING, DROPOUT)
     
-def generate_reply_transformer(persona, msg, tokenizer, transformer_graph, max_reply_length):
+    optimizer = tf.keras.optimizers.Adam(TransformerSchedule(D_MODEL), 
+                                         beta_1=0.9, beta_2=0.98, 
+                                         epsilon=1e-9)
+    
+    ckpt = tf.train.Checkpoint(transformer=transformer, optimizer=optimizer)
+    manager = tf.train.CheckpointManager(ckpt, pre.TRANSFORMER_CHECKPOINT_PATH,
+                                         max_to_keep=3)
+    
+    ckpt.restore(manager.latest_checkpoint)
+    if manager.latest_checkpoint:
+        print("Sucessfully loaded Transformer from file")
+    else:
+        print("Couldn't find Transformer at %s have you trained?" % 
+              pre.TRANSFORMER_CHECKPOINT_PATH)
+    
+    return transformer, None, None
+    
+def generate_reply_transformer(persona, msg, tokenizer, transformer, max_reply_length):
     ''' Generates Transformer reply and attention weights '''
     no_persona = False
     if persona == '':
@@ -778,10 +791,10 @@ def generate_reply_transformer(persona, msg, tokenizer, transformer_graph, max_r
         encoder_mask, look_ahead_mask, decoder_mask = create_masks(
             input_seq, out_seq)
         
+        inputs = [input_seq, seg_seq, out_seq, False, encoder_mask, look_ahead_mask,
+                decoder_mask]
         # => (batch_size, out_seq.shape[1] + 1, vocab_size)
-        pred, attn_weights = transformer_graph(
-            [input_seq, seg_seq, out_seq, False, encoder_mask, look_ahead_mask,
-                decoder_mask])
+        pred, attn_weights = transformer(inputs)
         
         # get the last word predicted by the transformer
         pred = pred[:, -1: , :]
@@ -803,7 +816,6 @@ Tried to convert generate_reply_transformer into a tf.function
 so it can be used directly in TF serving, but tf.function
 only supports TF ops :( so it's just not possible to do
 the tokenization or any non-trivial preprocessing in a tf.function
-
 Solution: make a new tf.function that takes a preprocessed tensor for
 the input and does the input feeding logic and export as a graph.
 TF serving will use that graph and wrap the serving around Flask server
@@ -884,4 +896,3 @@ if __name__ == "__main__":
     
     assert out.shape == (128, 25, 8136)
     # ------ ------ #
-    

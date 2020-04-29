@@ -414,7 +414,7 @@ def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encode
     save_seq2seq(encoder, decoder, deep_lstm)
     return EPOCHS            
 
-def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False):
+def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, pre_train=True):
     vocab, persona_length, msg_length, reply_length = pre.get_vocab()
     tokenizer = pre.fit_tokenizer(vocab)
     vocab_size = len(tokenizer.word_index) + 1
@@ -438,79 +438,80 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     else:        
         encoder = MultipleEncoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
         decoder = MultipleDecoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
-        
-    # ------ Pretrain on Movie dataset ------ #
-    movie_epochs = 15
-    movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
-
-    encoder_msg_input  = movie_conversations[:, 0]
-    encoder_persona_input = np.array(["" for _ in encoder_msg_input])
-    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
-
-    movie_conversations = None
-    
-    msg_raw = encoder_msg_input[:20]
-    persona_raw = encoder_persona_input[:20]
-    
-    # integer encode training data
-    encoder_persona_input = pre.encode_sequences(tokenizer, persona_length, encoder_persona_input)
-    encoder_msg_input  = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
-    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
-    
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target)).shuffle(BUFFER_SIZE)
-    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
-    batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
-    
-    encoder_persona_input, encoder_msg_input, decoder_target = None, None, None
     
     optimizer = Adam(clipnorm=CLIP_NORM)
     loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
     
-    epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, 0, PATIENCE)
+    if pre_train:
+        # ------ Pretrain on Movie dataset ------ #
+        movie_epochs = 15
+        movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
     
-    print("Finished Pre-training on Movie dataset for %d epochs" % epochs)
+        encoder_msg_input  = movie_conversations[:, 0]
+        encoder_persona_input = np.array(["" for _ in encoder_msg_input])
+        decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
     
-    # do some dummy text generation
-    for i in range(len(msg_raw)):
-        reply, persona_attn_weights, msg_attn_weights = generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona_raw[i], msg_raw[i], persona_length, msg_length, out_seq_length)
-        print("Message:", msg_raw[i])
-        print("Reply:", reply + "\n")
-    # ------ ------ #
-    
-    # ------ Pretrain on Daily Dialogue ------ #
-    daily_epochs = 15
-    conversations = pre.load_dailydialogue_dataset()
-    
-    encoder_msg_input  = conversations[:, 0]
-    encoder_persona_input = np.array(["" for _ in encoder_msg_input])
-    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
-    
-    conversations = None
-    
-    msg_raw = encoder_msg_input[:20]
-    persona_raw = encoder_persona_input[:20]
-    
-    # integer encode training data
-    encoder_persona_input = pre.encode_sequences(tokenizer, persona_length, encoder_persona_input)
-    encoder_msg_input  = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
-    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
-    
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target)).shuffle(BUFFER_SIZE)
-    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
-    batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
-    
-    encoder_persona_input, encoder_msg_input, decoder_target = None, None, None
-    
-    epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, 0, PATIENCE)
-    
-    print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
-    
-    # do some dummy text generation
-    for i in range(len(msg_raw)):
-        reply, persona_attn_weights, msg_attn_weights = generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona_raw[i], msg_raw[i], persona_length, msg_length, out_seq_length)
-        print("Message:", msg_raw[i])
-        print("Reply:", reply + "\n")
-    # ------ ------ #
+        movie_conversations = None
+        
+        msg_raw = encoder_msg_input[:20]
+        persona_raw = encoder_persona_input[:20]
+        
+        # integer encode training data
+        encoder_persona_input = pre.encode_sequences(tokenizer, persona_length, encoder_persona_input)
+        encoder_msg_input  = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
+        decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
+        
+        dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target)).shuffle(BUFFER_SIZE)
+        dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+        batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
+        
+        encoder_persona_input, encoder_msg_input, decoder_target = None, None, None
+        
+        epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, 0, PATIENCE)
+        
+        print("Finished Pre-training on Movie dataset for %d epochs" % epochs)
+        
+        # do some dummy text generation
+        for i in range(len(msg_raw)):
+            reply, persona_attn_weights, msg_attn_weights = generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona_raw[i], msg_raw[i], persona_length, msg_length, out_seq_length)
+            print("Message:", msg_raw[i])
+            print("Reply:", reply + "\n")
+        # ------ ------ #
+        
+        # ------ Pretrain on Daily Dialogue ------ #
+        daily_epochs = 15
+        conversations = pre.load_dailydialogue_dataset()
+        
+        encoder_msg_input  = conversations[:, 0]
+        encoder_persona_input = np.array(["" for _ in encoder_msg_input])
+        decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
+        
+        conversations = None
+        
+        msg_raw = encoder_msg_input[:20]
+        persona_raw = encoder_persona_input[:20]
+        
+        # integer encode training data
+        encoder_persona_input = pre.encode_sequences(tokenizer, persona_length, encoder_persona_input)
+        encoder_msg_input  = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
+        decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
+        
+        dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target)).shuffle(BUFFER_SIZE)
+        dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
+        batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
+        
+        encoder_persona_input, encoder_msg_input, decoder_target = None, None, None
+        
+        epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, 0, PATIENCE)
+        
+        print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
+        
+        # do some dummy text generation
+        for i in range(len(msg_raw)):
+            reply, persona_attn_weights, msg_attn_weights = generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona_raw[i], msg_raw[i], persona_length, msg_length, out_seq_length)
+            print("Message:", msg_raw[i])
+            print("Reply:", reply + "\n")
+        # ------ ------ #
 
     # ------ Train on PERSONA-CHAT ------ #
     train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
