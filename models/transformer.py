@@ -19,10 +19,10 @@ PSN = 1
 MSG = 2
 
 # hyperparameters
-D_MODEL = 1024
-NUM_LAYERS = 6 
-NUM_HEADS = 16
-D_FF = 2048
+D_MODEL = 128
+NUM_LAYERS = 4
+NUM_HEADS = 8
+D_FF = 512
 DROPOUT = 0.1
 USE_SEG_EMBEDDING = True
 
@@ -31,6 +31,7 @@ loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True,
                                                             reduction='none')
 train_loss = tf.keras.metrics.Mean(name='train_loss')
 train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
+val_loss = tf.keras.metrics.Mean(name='val_loss')
 transformer = None
 checkpoint = None
 checkpoint_manage = None
@@ -318,7 +319,14 @@ class Transformer(tf.keras.Model):
         
         self.output_layer = Dense(vocab_size)
     
-    @tf.function
+    @tf.function(input_signature=[[
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=[], dtype=tf.bool),
+        tf.TensorSpec(shape=(None, 1, 1, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, 1, None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, 1, 1, None), dtype=tf.float32)]])
     def call(self, inputs):
         ''' 
         One Transformer Forward Pass
@@ -329,7 +337,7 @@ class Transformer(tf.keras.Model):
         msg shape     => (batch_size, in_seq_length)
         segment shape => (batch_size, in_seq_length)
         reply shape   => (batch_size, out_seq_length)
-        output shape  => (batch_size, out_seq_length, vocab_size)
+        output shape  => (batch_size, out_seq_length, vocab_size)t
         '''
         msg, segment, reply, is_training, enc_mask, look_ahead_mask, dec_mask = inputs
         
@@ -339,8 +347,8 @@ class Transformer(tf.keras.Model):
                                                   is_training, look_ahead_mask, 
                                                   dec_mask])
         output = self.output_layer(decoder_output)
-        
-        return output, attn_dict
+        ##############################################################################
+        return output, output
 
 class TransformerSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     ''' Learning rate scheduler for Adam https://arxiv.org/pdf/1706.03762.pdf '''
@@ -482,7 +490,8 @@ def create_subword_tokenizer():
     return tokenizer, in_seq_length + 3, out_seq_length + 2
 
 def encode_sentence(persona, message, tokenizer, max_length, drop_example=False):
-    ''' Tokenize a sentences and pad/truncate according to max_length '''
+    ''' Tokenize a sentences and pad/truncate according to max_length 
+        pass max_length = None for no padding or truncation'''
     
     if persona == "":
         # encoding a reply
@@ -491,13 +500,13 @@ def encode_sentence(persona, message, tokenizer, max_length, drop_example=False)
         encoded = [tokenizer.vocab_size + SOS] +  tokenizer.encode(persona) + [tokenizer.vocab_size + SEP] + tokenizer.encode(message) + [tokenizer.vocab_size + EOS]
     
     # pad, truncate or drop the example
-    if len(encoded) > max_length:
+    if max_length != None and len(encoded) > max_length:
         if drop_example:
             return None
         else:
             # truncate the message so it fits in the max length specified
             del encoded[:max_length]
-    else:
+    elif max_length != None:
         encoded = encoded + [0 for i in range(max_length - len(encoded))]
     return encoded
 
@@ -555,6 +564,24 @@ def generate_segment_list(encoded, pad_length, sep_index, no_persona=False):
     tf.TensorSpec(shape=(None, None), dtype=tf.int32),
     tf.TensorSpec(shape=(None, None), dtype=tf.int32),
     tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+def val_step(msg_batch, seg_batch, reply_batch):
+    reply_input_batch  = reply_batch[:, :-1]
+    reply_target_batch = reply_batch[:, 1:]
+    
+    encoder_mask, look_ahead_mask, decoder_mask = create_masks(msg_batch, 
+                                                               reply_input_batch)
+    generated_sentences, _ = transformer([msg_batch, seg_batch, 
+                                         reply_input_batch, False,
+                                         encoder_mask, look_ahead_mask,
+                                         decoder_mask])
+    loss = loss_function(reply_target_batch, generated_sentences)
+        
+    val_loss(loss)
+
+@tf.function(input_signature=[
+    tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
 def train_step(msg_batch, seg_batch, reply_batch):
     # use teacher forcing by passing Transformer the ground truth
     # as as the reply input
@@ -575,31 +602,74 @@ def train_step(msg_batch, seg_batch, reply_batch):
     optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
     
     train_loss(loss)
-    train_accuracy(loss)
+    train_accuracy(reply_target_batch, generated_sentences)
 
 
 def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
+    min_val_loss = float("inf")
+    no_improvement_counter = 0
+    
     for epoch in range(EPOCHS):
         elapsed = time()
         train_loss.reset_states()
         train_accuracy.reset_states()
+        val_loss.reset_states()
         
+        # train
         for(batch, (msg, seg, reply)) in enumerate(dataset):
             train_step(msg, seg, reply)
             
             if pre.VERBOSE == 1:
                 print("Epoch %d: Batch %d: Loss %f, Accuracy %f" %
                       (epoch + 1, batch, train_loss.result(), train_accuracy.result()))
+        
+        # calculate validation loss
+        if val_dataset != None:
+            for(batch, (msg, seg, reply)) in enumerate(val_dataset):
+                val_step(msg, seg, reply)
+                
+            val_loss_result = val_loss.result()
             
+            if val_loss_result < min_val_loss:
+                print("Saving graph as best val loss decreased from %f to %f" % 
+                      (min_val_loss, val_loss_result))
+                save_transformer()
+                no_improvement_counter = 0
+                min_val_loss = val_loss_result
+            else:
+                no_improvement_counter += 1
+        
+        # checkpoint and print results
         if (epoch + 1) % 10 == 0:
             # checkpoint model every 10 epochs
             save_path = checkpoint_manager.save()
             print("Epoch %d: Checkpoint saved at %s" % (epoch + 1, save_path))
         
-        print("Epoch %d --- %d sec: Loss %f, Accuracy %f" % (epoch + 1, 
-                                                             time() - elapsed,
-                                                             train_loss.result(),
-                                                             train_accuracy.result()))
+        if val_dataset != None:
+            print("Epoch %d --- %d sec: Loss %f, Accuracy %f, Val Loss %f" % (epoch + 1, 
+                                                                 time() - elapsed,
+                                                                 train_loss.result(),
+                                                                 train_accuracy.result(),
+                                                                 val_loss_result))
+        else:
+            print("Epoch %d --- %d sec: Loss %f, Accuracy %f" % (epoch + 1, 
+                                                                 time() - elapsed,
+                                                                 train_loss.result(),
+                                                                 train_accuracy.result()))
+        # early stopping
+        if epoch + 1 == MIN_EPOCHS:
+            print("Saving model as min epochs %d reached" % MIN_EPOCHS)
+            save_transformer()
+            
+        if no_improvement_counter >= PATIENCE and epoch > MIN_EPOCHS:
+            print("Early stopping, no improvement over minimum in %d epochs" % PATIENCE)
+            return epoch + 1
+        
+    return EPOCHS
+        
+    
+            
+        
 def train_transformer(BATCH_SIZE):
     global transformer
     global checkpoint
@@ -621,7 +691,7 @@ def train_transformer(BATCH_SIZE):
     # ------ Pretrain on Movie dataset ------ #
     movie_epochs = 15
     movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
-    movie_conversations = movie_conversations[:4, :]######
+    movie_conversations = movie_conversations[:1, :]######
     pre.VERBOSE = 1
     
     raw = movie_conversations[:20, 0]
@@ -654,117 +724,95 @@ def train_transformer(BATCH_SIZE):
                                                     pre.TRANSFORMER_CHECKPOINT_PATH,
                                                     max_to_keep=3)
     
-    train(dataset, None, 10, 10, 10)
+    train(dataset, None, 100, 100, 100)
+    
+    # do some dummy text generation
+    for i in range(len(raw)):
+        reply, _ = generate_reply_transformer("", raw[i], tokenizer,
+                                              transformer, out_seq_length)
+        print("Message:", raw[i])
+        print("reply", reply)
+        
+    # save the model in a tf graph
+    
+    transformer = tf.saved_model.load(pre.TRANSFORMER_MODEL_FN)
+    
+    # do some dummy text generation
+    for i in range(len(raw)):
+        reply, _ = generate_reply_transformer("", raw[i], tokenizer,
+                                              transformer, out_seq_length)
+        print("Message:", raw[i])
+        print("reply", reply)
     
     
-    
-    
+def save_transformer():
+    tf.saved_model.save(transformer, pre.TRANSFORMER_MODEL_FN, signatures=transformer.call.get_concrete_function(
+    [
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=[], dtype=tf.bool),
+        tf.TensorSpec(shape=(None, 1, 1, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, 1, None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, 1, 1, None), dtype=tf.float32)
+    ]))
 
-train_transformer(2)
+    
+def generate_reply_transformer(persona, msg, tokenizer, transformer_graph, max_reply_length):
+    ''' Generates Transformer reply and attention weights '''
+    no_persona = False
+    if persona == '':
+        no_persona = True
+        
+    input_seq = encode_sentence(persona, msg, tokenizer, None)
+    seg_seq = generate_segment_list(input_seq, len(input_seq), 
+                                    tokenizer.vocab_size + SEP, 
+                                    no_persona)
+    
+    input_seq = tf.expand_dims(input_seq, 0)
+    seg_seq   = tf.expand_dims(seg_seq, 0)
+    out_seq   = tf.expand_dims([tokenizer.vocab_size + SOS], 0)
+    
+    # Predicts sentence word by word
+    for i in range(max_reply_length):
+        encoder_mask, look_ahead_mask, decoder_mask = create_masks(
+            input_seq, out_seq)
+        
+        # => (batch_size, out_seq.shape[1] + 1, vocab_size)
+        pred, attn_weights = transformer_graph(
+            [input_seq, seg_seq, out_seq, False, encoder_mask, look_ahead_mask,
+                decoder_mask])
+        
+        # get the last word predicted by the transformer
+        pred = pred[:, -1: , :]
+        subword_id = tf.cast(
+            tf.argmax(pred, axis=-1), tf.int32)
+        
+        if subword_id == tokenizer.vocab_size + EOS:
+            break
+        
+        out_seq = tf.concat([out_seq, subword_id], axis=-1)
+    
+    out_seq = tf.squeeze(out_seq, axis=0)
+    reply = tokenizer.decode([i for i in out_seq if i < tokenizer.vocab_size + SOS])
+    return reply, attn_weights
+    
 
 '''
-    # ------ Pretrain on Movie dataset ------ #
-    movie_epochs = 15
-    movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
-    
-    encoder_input  = movie_conversations[:, 0]
-    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
-    movie_conversations = None
-    
-    
-    
-    raw = encoder_input[:20]
+Tried to convert generate_reply_transformer into a tf.function
+so it can be used directly in TF serving, but tf.function
+only supports TF ops :( so it's just not possible to do
+the tokenization or any non-trivial preprocessing in a tf.function
 
-    # integer encode training data
-    segment_input  = np.array([generate_segment_array(msg, in_seq_length, no_persona=True) for msg in encoder_input])
-    encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
-    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
-    
-    # load GloVe embeddings, make the embeddings for encoder and decoder tied https://www.aclweb.org/anthology/E17-2025.pdf
-    embedding_matrix = pre.load_glove_embedding(tokenizer, pre.GLOVE_FN)
-    e_dim = embedding_matrix.shape[1]
-    embedding_matrix = Embedding(vocab_size, embedding_matrix.shape[1], weights=[embedding_matrix], trainable=True, mask_zero=True, name="tied_embedding")
-
-    if deep_lstm:
-        encoder = DeepEncoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE, use_segment_embedding, e_dim)
-        decoder = DeepDecoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
-    else:
-        encoder = Encoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE, use_segment_embedding, e_dim)
-        decoder = Decoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
-    
-    optimizer = Adam(clipnorm=CLIP_NORM)
-    # will give labels as integers instead of one hot so use sparse CCE
-    loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
-
-    movie_epochs = train(encoder_input, segment_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, PATIENCE)
-    
-    print("Finished Pre-training on Cornell Movie Dataset for %d epochs" % movie_epochs)
-    
-    # do some dummy text generation
-    for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
-        print("Message:", raw[i])
-        print("Reply:", reply + "\n")
-    # ------ ------ #
-
-    
-    # ------ Pretrain on Daily Dialogue ------ #
-    daily_epochs = 50
-    conversations = pre.load_dailydialogue_dataset()
-    
-    encoder_input  = conversations[:, 0]
-    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
-    
-    conversations = None
-    
-    raw = encoder_input[:20]
-    
-    # integer encode training data
-    segment_input  = np.array([generate_segment_array(msg, in_seq_length, no_persona=True) for msg in encoder_input])
-    encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
-    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
-    
-    daily_epochs = train(encoder_input, segment_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, PATIENCE)
-    
-    print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
-    
-    # do some dummy text generation
-    for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
-        print("Message:", raw[i])
-        print("Reply:", reply + "\n")
-    # ------ ------ #
-    
-    
-    # ------ Train on PERSONA-CHAT ------ #
-    train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
-    
-    # train is a numpy array containing triples [message, reply, persona_index]
-    # personas is an numpy array of strings for the personas
-
-    encoder_input  = np.array([train_personas[int(row[2])] + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in train_data])
-    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in train_data])
-    
-    train_data, train_personas = None, None
-    
-    raw = encoder_input[:20]
-    
-    # integer encode training data
-    segment_input  = np.array([generate_segment_array(msg, in_seq_length) for msg in encoder_input])
-    encoder_input  = pre.encode_sequences(tokenizer, in_seq_length, encoder_input)
-    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
-    
-    epochs = train(encoder_input, segment_input, decoder_target, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, PATIENCE)
-    
-    print("Finished Training on PERSONA-CHAT for %d epochs" % epochs)
-    
-    # do some dummy text generation
-    for i in range(len(raw)):
-        reply, attn_weights = generate_reply_seq2seq(encoder, decoder, tokenizer, raw[i], in_seq_length, out_seq_length)
-        print("Message:", raw[i])
-        print("Reply:", reply + "\n")
-    # ------ ------ #
+Solution: make a new tf.function that takes a preprocessed tensor for
+the input and does the input feeding logic and export as a graph.
+TF serving will use that graph and wrap the serving around Flask server
+which will do the preprocessing.
+https://github.com/tensorflow/serving/issues/663
 '''
+
+    
+train_transformer(1)
 
 if __name__ == "__main__":
     # do some tests to ensure Encoder and Decoder have correct dimensionality

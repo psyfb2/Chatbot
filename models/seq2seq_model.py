@@ -275,7 +275,6 @@ def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, l
     
     return total_loss
 
-@tf.function
 def train_step(encoder_input, segment_input, decoder_target, encoder, decoder, loss_object, tokenizer, optimizer, BATCH_SIZE):
     '''
     Perform training on a single batch
@@ -347,7 +346,7 @@ def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encode
             print("Epoch %d --- %d sec: Loss %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch))
             
         if epoch + 1 == MIN_EPOCHS:
-            print("Saving model as min epochs %d reached", MIN_EPOCHS)
+            print("Saving model as min epochs %d reached" % MIN_EPOCHS)
             save_seq2seq(encoder, decoder, deep_lstm)
         
         if no_improvement_counter >= PATIENCE and epoch > MIN_EPOCHS:
@@ -409,7 +408,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
     # will give labels as integers instead of one-hot so use sparse CCE
     loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
 
-    movie_epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, EPOCHS, 0, PATIENCE)
+    movie_epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, 0, PATIENCE)
     
     print("Finished Pre-training on Cornell Movie Dataset for %d epochs" % movie_epochs)
     
@@ -443,7 +442,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
     
     encoder_input, segment_input, decoder_target = None, None, None
     
-    daily_epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, EPOCHS, 0, PATIENCE)
+    daily_epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, 0, PATIENCE)
     
     print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
     
@@ -551,7 +550,7 @@ def save_seq2seq(encoder, decoder, deep_lstm):
         ]))
     
 def plot_attention(attn_weights, message, reply):
-    ''' Visualize attention weights '''
+    ''' Visualize attention weights from seq2seq attention '''
     fig = plt.figure(figsize=(15, 15))
     axis = fig.add_subplot(1, 1, 1)
     
@@ -570,6 +569,7 @@ def plot_attention(attn_weights, message, reply):
 def generate_reply_seq2seq(encoder, decoder, tokenizer, input_msg, in_seq_length, out_seq_length):
     '''
     Generates a reply for a trained sequence to sequence model using greedy search 
+    input_msg should be persona + pre.SEP_SEQ + message
     '''
     input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
     input_seq = tf.convert_to_tensor(input_seq)

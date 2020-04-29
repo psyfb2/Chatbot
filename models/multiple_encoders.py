@@ -334,7 +334,6 @@ def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, l
     
     return total_loss
 
-@tf.function
 def train_step(persona, msg, decoder_target, encoder, decoder, loss_object, tokenizer, optimizer, BATCH_SIZE):
     '''
     Perform training on a single batch
@@ -629,8 +628,8 @@ def generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona, msg, p
     
     reply = []
     for t in range(out_seq_length):
-        softmax_layer, persona_attn_score, msg_attn_score, context_vec_concat, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, False, initial_state])
-        
+        softmax_layer, persona_attn_score, msg_attn_score, context_vec_concat, *initial_state = decoder(
+            [decoder_input, encoder_persona_states, encoder_msg_states, context_vec_concat, False, initial_state])
         persona_attn_score = tf.reshape(persona_attn_score, (-1,))
         persona_attn_weights[t] = persona_attn_score.numpy()
         
