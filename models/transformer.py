@@ -19,12 +19,11 @@ PSN = 1
 MSG = 2
 
 # hyperparameters
-D_MODEL = 128
-NUM_LAYERS = 4
+D_MODEL = 512
+NUM_LAYERS = 6
 NUM_HEADS = 8
-D_FF = 512
+D_FF = 2048
 DROPOUT = 0.1
-USE_SEG_EMBEDDING = True
 
 # globals
 loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True,
@@ -52,7 +51,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         # d_k, d_q == d_v, for a vectorised implementation
         self.d_k = d_model // num_heads
         
-        # weights to tranform input into query, key and value matricies
+        # weights to transform input into query, key and value matricies
         self.wq = Dense(d_model)
         self.wk = Dense(d_model)
         self.wv = Dense(d_model)
@@ -342,6 +341,7 @@ class Transformer(tf.keras.Model):
 
         return output, attn_dict
 
+
 class TransformerSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     ''' Learning rate scheduler for Adam https://arxiv.org/pdf/1706.03762.pdf '''
     def __init__(self, d_model, warmup_steps=4000):
@@ -352,6 +352,7 @@ class TransformerSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __call__(self, step):
         return (tf.math.rsqrt(self.d_model) * tf.math.minimum(
             tf.math.rsqrt(step), step * (self.warmup_steps ** -1.5)))
+
 
 def loss_function(label, pred):
     mask = tf.math.logical_not(tf.math.equal(label, 0))
@@ -391,26 +392,31 @@ def dot_product_attention(q, k, v, mask):
     
     attn_weights = tf.nn.softmax(scaled_q_kt, axis=-1)
     
-    #> (batch_size, m, d_v)
-    q_kt_v = tf.matmul(scaled_q_kt, v)
+    # => (batch_size, m, d_v)
+    q_kt_v = tf.matmul(attn_weights, v)
     
     return q_kt_v, attn_weights
+
 
 def MLP(d_model, hidden_units):
     ''' Feed Forward Transformer Layer '''
     return tf.keras.Sequential([Dense(hidden_units),
                                 Dense(d_model)])
 
+
 def get_angles(pos, i, d_model):
     angle_freq = 1 / np.power(10000, (2 * (i//2)) / np.float32(d_model))
     return pos * angle_freq
 
+
 def positional_encoding(pos, d_model):
-    ''' Get positional embeddings for words at pos 1,...,pos ''' 
+    '''
+    Get positional encoding shape => (1, pos, d_model)
+    '''
     angle_radians = get_angles(np.arange(pos)[:, np.newaxis],
-                            np.arange(d_model)[np.newaxis, :],
-                            d_model)
-    
+                               np.arange(d_model)[np.newaxis, :],
+                               d_model)
+
     # Sine at even indices in the array, 2i
     angle_radians[:, 0::2] = np.sin(angle_radians[:, 0::2])
     
@@ -421,11 +427,13 @@ def positional_encoding(pos, d_model):
       
     return tf.cast(pos_encoding, dtype=tf.float32)
 
+
 def create_look_ahead_mask(size):
     ''' Ensure the decoder can only see words it's generated '''
     mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
     # => (reply_length, reply_length)
     return mask  
+
 
 def create_padding_mask(seq):
     ''' Return tensor of same shape, with 1 where zero padding value is present, else 0 '''
@@ -434,6 +442,7 @@ def create_padding_mask(seq):
     # add extra dimensions to add the padding to the attention logits
     # => (batch_size, 1, 1, seq_len)
     return seq[:, tf.newaxis, tf.newaxis, :]  
+
 
 def create_masks(msg_seq, reply_seq):
     # mask for encoder self attention so it
@@ -450,6 +459,7 @@ def create_masks(msg_seq, reply_seq):
     look_ahead_mask = tf.maximum(output_mask, look_ahead_mask)
     
     return encoder_padding, look_ahead_mask, decoder_padding
+
 
 def percentile_length(sentences, tokenizer, percentile):
     ''' [["hello how are you ?"], ...] => percentile length of subword encoded strings '''
@@ -481,6 +491,7 @@ def create_subword_tokenizer():
     # or reply > out_seq_length, should be dropped, +3 for SOS, EOS, SOS tokens
     return tokenizer, in_seq_length + 3, out_seq_length + 2
 
+
 def encode_sentence(persona, message, tokenizer, max_length, drop_example=False):
     ''' Tokenize a sentences and pad/truncate according to max_length 
         pass max_length = None for no padding or truncation'''
@@ -502,13 +513,14 @@ def encode_sentence(persona, message, tokenizer, max_length, drop_example=False)
         encoded = encoded + [0 for i in range(max_length - len(encoded))]
     return encoded
 
+
 def encode_training_examples(personas, msg_reply_pairs, tokenizer, in_seq_length, out_seq_length):
     ''' Encode all training examples '''
     encoder_input = []
     decoder_target = []
     
     for i in range(len(msg_reply_pairs)):
-        if personas == None:
+        if personas is None:
             # no persona data
             msg = encode_sentence("", msg_reply_pairs[i, 0], tokenizer, in_seq_length, True)
             reply = encode_sentence("", msg_reply_pairs[i, 1], tokenizer, out_seq_length, True)
@@ -522,9 +534,9 @@ def encode_training_examples(personas, msg_reply_pairs, tokenizer, in_seq_length
         if msg != None and reply != None:
             encoder_input.append(msg)
             decoder_target.append(reply)
-            
-    
+
     return np.array(encoder_input), np.array(decoder_target)
+
 
 def generate_segment_list(encoded, pad_length, sep_index, no_persona=False):
     ''' Generates a list of segment indicies based on the seperator index '''
@@ -655,46 +667,72 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
         
     return EPOCHS
 
-def train_transformer(BATCH_SIZE):
-    global transformer
-    global checkpoint
-    global checkpoint_manager
-    global optimizer
-    
+def data_pipeline(BATCH_SIZE):
+    ''' Load data from file into integer encoded format '''
     tokenizer, in_seq_length, out_seq_length = create_subword_tokenizer()
     # +3 for SOS, SEP, EOS tokens
     vocab_size = tokenizer.vocab_size + 3
     sample_str = "optimus prime goodness"
     assert tokenizer.decode(tokenizer.encode(sample_str)) == sample_str
     
+    BUFFER_SIZE = 15000
+    
     print("Input Length: %d " % in_seq_length)
     print("Output Length: %d" % out_seq_length)
     print("Vocab Size: %d" % vocab_size)
     
-    BUFFER_SIZE = 15000
-    
+    # load training data
     train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
-    pre.VERBOSE = 1
+    train_data = train_data[:256]
+    
+    raw_msg = [msg for msg in train_data[:20, 0]]
+    raw_persona = [train_personas[int(p_index)] for p_index in train_data[:20, 2]]
     
     # integer encode sequences
     encoder_input, decoder_target = encode_training_examples(train_personas, 
                                                              train_data, tokenizer, 
                                                              in_seq_length, out_seq_length)
     segment_input  = np.array([generate_segment_list(encoded_msg, 
-                               in_seq_length, False) for encoded_msg in encoder_input])
-    
-    #persona_raw = 
+                               in_seq_length, tokenizer.vocab_size + SEP) for encoded_msg in encoder_input])
     
     dataset = tf.data.Dataset.from_tensor_slices(
         (encoder_input, segment_input, decoder_target)).cache().shuffle(BUFFER_SIZE)
     dataset = dataset.batch(BATCH_SIZE)
     
-    train_data, train_personas = None, None
-    encoder_input, decoder_target, segment_input = None, None, None
+    
+    # validation data
+    train_personas, train_data = pre.load_dataset(pre.VALID_FN)
+    train_data = train_data[:32]
+    encoder_input, decoder_target = encode_training_examples(train_personas, 
+                                                             train_data, tokenizer, 
+                                                             in_seq_length, out_seq_length)
+    segment_input  = np.array([generate_segment_list(encoded_msg, 
+                               in_seq_length, tokenizer.vocab_size + SEP) for encoded_msg in encoder_input])
+    
+    val_dataset = tf.data.Dataset.from_tensor_slices(
+        (encoder_input, segment_input, decoder_target))
+    val_dataset = val_dataset.batch(BATCH_SIZE)
+    
+    return dataset, val_dataset, tokenizer, in_seq_length, out_seq_length, raw_msg, raw_persona
+    
+    
+
+def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embedding=True):
+    global transformer
+    global checkpoint
+    global checkpoint_manager
+    global optimizer
+    
+    pre.VERBOSE = 1
+    
+    dataset, val_dataset, tokenizer, in_seq_length, out_seq_length, raw_msg, raw_persona = (
+        data_pipeline(BATCH_SIZE))
+    
+    vocab_size = tokenizer.vocab_size + 3
     
     transformer = Transformer(D_MODEL, NUM_LAYERS, NUM_HEADS, D_FF,
                               vocab_size, vocab_size, vocab_size, 
-                              USE_SEG_EMBEDDING, DROPOUT)
+                              use_segment_embedding, DROPOUT)
     
     optimizer = tf.keras.optimizers.Adam(TransformerSchedule(D_MODEL), 
                                          beta_1=0.9, beta_2=0.98, 
@@ -705,20 +743,24 @@ def train_transformer(BATCH_SIZE):
     checkpoint = tf.train.Checkpoint(transformer=transformer,
                                      optimizer=optimizer)
     
-    checkpoint_manager = tf.train.CheckpointManager(checkpoint, 
+    checkpoint_manager = tf.train.CheckpointManager(checkpoint,
                                                     pre.TRANSFORMER_CHECKPOINT_PATH,
                                                     max_to_keep=3)
     
-    train(dataset, None, 100, 100, 100)
+    train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE)
     
-    # do some dummy text generation
-    for i in range(len(raw)):
-        reply, _ = generate_reply_transformer("", raw[i], tokenizer,
-                                              transformer, out_seq_length)
-        print("Message:", raw[i])
-        print("reply", reply)
-        
     tokenizer.save_to_file(pre.TRANSFORMER_TOKENIZER_FN)
+    
+    # do some text generation on train set
+    for i in range(len(raw_msg)):
+        reply, attn_dict = generate_reply_transformer(raw_persona[i], raw_msg[i],
+                                                      tokenizer, transformer,
+                                                      out_seq_length)
+        print("Persona:", raw_persona[i])
+        print("Message:", raw_msg[i])
+        print("Reply:", reply, "\n")
+        
+    
 
 def load_saved_transformer():
     '''
@@ -747,7 +789,7 @@ def load_saved_transformer():
         
     transformer = Transformer(D_MODEL, NUM_LAYERS, NUM_HEADS, D_FF,
                               vocab_size, vocab_size, vocab_size, 
-                              USE_SEG_EMBEDDING, DROPOUT)
+                              True, DROPOUT)
     
     optimizer = tf.keras.optimizers.Adam(TransformerSchedule(D_MODEL), 
                                          beta_1=0.9, beta_2=0.98, 
@@ -788,7 +830,7 @@ def generate_reply_transformer(persona, msg, tokenizer, transformer, max_reply_l
             input_seq, out_seq)
         
         inputs = [input_seq, seg_seq, out_seq, False, encoder_mask, look_ahead_mask,
-                decoder_mask]
+                  decoder_mask]
         # => (batch_size, out_seq.shape[1] + 1, vocab_size)
         pred, attn_weights = transformer(inputs)
         
@@ -805,8 +847,9 @@ def generate_reply_transformer(persona, msg, tokenizer, transformer, max_reply_l
     out_seq = tf.squeeze(out_seq, axis=0)
     reply = tokenizer.decode([i for i in out_seq if i < tokenizer.vocab_size + SOS])
     return reply, attn_weights
-    
 
+train_transformer(100, 32, 100, 100)
+    
 '''
 Tried to convert generate_reply_transformer into a tf.function
 so it can be used directly in TF serving, but tf.function
@@ -819,12 +862,28 @@ which will do the preprocessing.
 https://github.com/tensorflow/serving/issues/663
 '''
 
-    
-train_transformer(1)
-
 if __name__ == "__main__":
     # do some tests to ensure Encoder and Decoder have correct dimensionality
-    
+
+    # Key matrix, these will be matched with the query using dot product attention
+    k = tf.constant([[50, 0, 0],
+                    [0, 50, 0],
+                    [0, 0, 50]], dtype=tf.float32)
+
+    # Value matrix, these are multiplied by resulting softmax from dot product attention
+    v = tf.constant([[90, 0],
+                    [16, 0],
+                    [40, 5]], dtype=tf.float32)
+
+    # this query aligns perfectly only with the first key
+    q = tf.constant([[50, 0, 0]], dtype=tf.float32)
+
+    expected_attn = tf.convert_to_tensor([[1.0, 0.0, 0.0]])
+    expected_output = tf.convert_to_tensor([[90.0, 0.0]])
+    output, attn = dot_product_attention(q, k, v, None)
+    assert (output == expected_output).numpy().all()
+    assert (attn == expected_attn).numpy().all()
+
     # ------ Encoder Layer ------ #
     encoder_layer = EncoderLayer(1024, 16, 2048)
     encoder_in_shape = (128, 105, 1024)

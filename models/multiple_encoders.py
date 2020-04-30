@@ -367,7 +367,7 @@ def train_step(persona, msg, decoder_target, encoder, decoder, loss_object, toke
     optimizer.apply_gradients(zip(gradients, variables))
         
     return batch_loss
-        
+
 def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encoder, decoder, tokenizer, loss_object, optimizer, save_best_model, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE):
     ''' Train seq2seq model, with the use of early stopping '''        
     min_val_loss = float("inf")
