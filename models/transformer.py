@@ -654,10 +654,7 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
             return epoch + 1
         
     return EPOCHS
-        
-    
-            
-        
+
 def train_transformer(BATCH_SIZE):
     global transformer
     global checkpoint
@@ -676,23 +673,23 @@ def train_transformer(BATCH_SIZE):
     
     BUFFER_SIZE = 15000
     
-    # ------ Pretrain on Movie dataset ------ #
-    movie_epochs = 15
-    movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
-    movie_conversations = movie_conversations[:1, :]######
+    train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
     pre.VERBOSE = 1
     
-    raw = movie_conversations[:20, 0]
-    
     # integer encode sequences
-    encoder_input, decoder_target = encode_training_examples(None, movie_conversations, tokenizer, in_seq_length, out_seq_length)
-    segment_input  = np.array([generate_segment_list(encoded_msg, in_seq_length, True) for encoded_msg in encoder_input])
+    encoder_input, decoder_target = encode_training_examples(train_personas, 
+                                                             train_data, tokenizer, 
+                                                             in_seq_length, out_seq_length)
+    segment_input  = np.array([generate_segment_list(encoded_msg, 
+                               in_seq_length, False) for encoded_msg in encoder_input])
+    
+    #persona_raw = 
     
     dataset = tf.data.Dataset.from_tensor_slices(
         (encoder_input, segment_input, decoder_target)).cache().shuffle(BUFFER_SIZE)
     dataset = dataset.batch(BATCH_SIZE)
     
-    movie_conversations = None
+    train_data, train_personas = None, None
     encoder_input, decoder_target, segment_input = None, None, None
     
     transformer = Transformer(D_MODEL, NUM_LAYERS, NUM_HEADS, D_FF,
@@ -722,34 +719,32 @@ def train_transformer(BATCH_SIZE):
         print("reply", reply)
         
     tokenizer.save_to_file(pre.TRANSFORMER_TOKENIZER_FN)
+
+def load_saved_transformer():
+    '''
+    Load Transformer from checkpoint file
     
-    transformer = None
-    optimizer = None
-    
-    transformer, _, _ = load_saved_transformer(vocab_size)
-    
-    # do some dummy text generation
-    for i in range(len(raw)):
-        reply, _ = generate_reply_transformer("", raw[i], tokenizer,
-                                              transformer, out_seq_length)
-        print("Message:", raw[i])
-        print("reply", reply)
-    
-def load_saved_transformer(vocab_size):
-    ''' Loads Transformer, it's subword tokenizer from file and max reply length '''
+    Parameters
+    ----------
+    vocab_size : tokenizer vocab size (including SOS, EOS, SEP tokens)
+
+    Returns
+    -------
+    transformer : Transformer object, None if no checkpoints were found
+    optimizer : Adam optimizer
+    out_seq_length: max reply length which the Transformer was trained on
     '''
     try:
         tokenizer = tfds.features.text.SubwordTextEncoder.load_from_file(
             pre.TRANSFORMER_TOKENIZER_FN)
+        out_seq_length = 24
     except Exception:
-        print("Couldn't load tokenizer from file %s" % pre.TRANSFORMER_TOKENIZER_FN)
-        print("Recreating subword tokenizer model")
-        tokenizer, _, _ = create_subword_tokenizer()
+        print("Couldn't find tokenizer at %s" % pre.TRANSFORMER_TOKENIZER_FN)
+        print("Building a new one")
+        tokenizer, _, out_seq_length = create_subword_tokenizer()
     
     vocab_size = tokenizer.vocab_size + 3
-    max_reply_length = 24
-    '''
-            
+        
     transformer = Transformer(D_MODEL, NUM_LAYERS, NUM_HEADS, D_FF,
                               vocab_size, vocab_size, vocab_size, 
                               USE_SEG_EMBEDDING, DROPOUT)
@@ -762,14 +757,15 @@ def load_saved_transformer(vocab_size):
     manager = tf.train.CheckpointManager(ckpt, pre.TRANSFORMER_CHECKPOINT_PATH,
                                          max_to_keep=3)
     
-    ckpt.restore(manager.latest_checkpoint)
+    ckpt.restore(manager.latest_checkpoint).expect_partial()
     if manager.latest_checkpoint:
         print("Sucessfully loaded Transformer from file")
+        return transformer, optimizer, out_seq_length
     else:
         print("Couldn't find Transformer at %s have you trained?" % 
               pre.TRANSFORMER_CHECKPOINT_PATH)
+        return None, None, out_seq_length
     
-    return transformer, None, None
     
 def generate_reply_transformer(persona, msg, tokenizer, transformer, max_reply_length):
     ''' Generates Transformer reply and attention weights '''

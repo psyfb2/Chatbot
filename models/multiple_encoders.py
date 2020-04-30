@@ -11,8 +11,7 @@ from tensorflow.keras.layers import GRU, Dense, Embedding, Bidirectional, Dropou
 from tensorflow.keras.optimizers import Adam
 
 LSTM_DIM = 512
-CLIP_NORM = 5.0
-DROPOUT = 0.2
+DROPOUT = 0.4
 
 class MultipleEncoder(tf.keras.Model):
     ''' 
@@ -439,12 +438,12 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
         encoder = MultipleEncoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
         decoder = MultipleDecoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
     
-    optimizer = Adam(clipnorm=CLIP_NORM)
+    optimizer = Adam()
     loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
     
     if pre_train:
         # ------ Pretrain on Movie dataset ------ #
-        movie_epochs = 15
+        movie_epochs = 3
         movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
     
         encoder_msg_input  = movie_conversations[:, 0]
@@ -479,7 +478,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
         # ------ ------ #
         
         # ------ Pretrain on Daily Dialogue ------ #
-        daily_epochs = 15
+        daily_epochs = 3
         conversations = pre.load_dailydialogue_dataset()
         
         encoder_msg_input  = conversations[:, 0]
@@ -650,3 +649,86 @@ def generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona, msg, p
         decoder_input = tf.expand_dims([word_index], 0)
     
     return " ".join(reply), persona_attn_weights, msg_attn_weights
+
+
+class ChatBot():
+    def __init__(self, deep_model):
+        '''
+        Use this class from the outside for interaction and evaluation.
+
+        Parameters
+        ----------
+        deep_model : boolean
+            Load shallow or stacked trained model
+
+        Returns
+        -------
+        None
+
+        '''
+        vocab, self.persona_length, self.msg_length, self.reply_length = pre.get_vocab()
+        self.tokenizer = pre.fit_tokenizer(vocab)
+        if deep_model:
+            self.encoder = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_DEEP_MODEL_FN)
+            self.decoder = tf.saved_model.load(pre.SEQ2SEQ_DECODER_DEEP_MODEL_FN)
+        else:
+            self.encoder = tf.saved_model.load(pre.MULTIENC_ENCODER_MODEL_FN)
+            self.decoder = tf.saved_model.load(pre.MULTIENC_DECODER_MODEL_FN)
+        
+        # for plotting attention
+        self.persona_attn_weights = None
+        self.msg_attn_weights = None
+        self.last_persona = None
+        self.last_msg = None
+        self.last_reply = None
+        
+    
+    def reply(self, persona, message):
+        '''
+        Generate a reply using the saved model
+
+        Parameters
+        ----------
+        persona : str
+            persona description
+        message : str
+            message
+
+        Returns
+        -------
+        str
+            reply
+
+        '''
+        self.last_persona = persona
+        self.last_msg = message
+        
+        reply, self.persona_attn_weights, self.msg_attn_weights = (
+             generate_reply_multiple_encoder(self.encoder, self.decoder, 
+                                             self.tokenizer, persona, message, 
+                                             self.persona_length, 
+                                             self.msg_length, self.reply_length))
+        
+        self.last_reply = reply
+        return self.last_reply
+    
+    def plot_attn(self):
+        '''
+        Plot attention for the last generated reply
+
+        Returns
+        -------
+        None.
+
+        '''
+        if self.persona_attn_weights == None:
+            return
+        
+        pre.plot_attention(self.persona_attn_weights, self.last_persona, self.last_reply)
+        pre.plot_attention(self.msg_attn_weights, self.last_msg, self.last_reply)
+    
+    def eval_f1(self):
+        pass
+    
+    def eval_ppl(self):
+        pass

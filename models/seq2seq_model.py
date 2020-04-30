@@ -5,8 +5,6 @@
 import numpy as np
 import text_preprocessing as pre
 import tensorflow as tf
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 from time import time
 from math import log
 from copy import copy
@@ -14,11 +12,9 @@ from functools import reduce
 from tensorflow.keras.losses import SparseCategoricalCrossentropy
 from tensorflow.keras.layers import LSTM, Dense, Embedding, Bidirectional, Dropout
 from tensorflow.keras.optimizers import Adam
-from sklearn.model_selection import train_test_split
 
 LSTM_DIM = 512
-CLIP_NORM = 5.0
-DROPOUT = 0.2
+DROPOUT = 0.4
 
 class Encoder(tf.keras.Model):
     ''' 1 Layer Bidirectional LSTM '''
@@ -382,12 +378,12 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
         encoder = Encoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE, use_segment_embedding, e_dim)
         decoder = Decoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
     
-    optimizer = Adam(clipnorm=CLIP_NORM)
+    optimizer = Adam()
     loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
 
     if pre_train:
         # ------ Pretrain on Movie dataset ------ #
-        movie_epochs = 15
+        movie_epochs = 3
         movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
         
         encoder_input  = movie_conversations[:, 0]
@@ -421,7 +417,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
     
         
         # ------ Pretrain on Daily Dialogue ------ #
-        daily_epochs = 15
+        daily_epochs = 3
         conversations = pre.load_dailydialogue_dataset()
         
         encoder_input  = conversations[:, 0]
@@ -549,23 +545,6 @@ def save_seq2seq(encoder, decoder, deep_lstm):
             decoder_states_spec
         ]))
     
-def plot_attention(attn_weights, message, reply):
-    ''' Visualize attention weights from seq2seq attention '''
-    fig = plt.figure(figsize=(15, 15))
-    axis = fig.add_subplot(1, 1, 1)
-    
-    axis.matshow(attn_weights, cmap='viridis')
-    
-    font_size = {'fontsize' : 12}
-    
-    axis.set_xticklabels([''] + message.split(' '), fontdict=font_size, rotation=90)
-    axis.set_yticklabels([''] + reply.split(' '), fontdict=font_size)
-    
-    axis.xaxis.set_major_locator(ticker.MultipleLocator(1))
-    axis.yaxis.set_major_locator(ticker.MultipleLocator(1))
-
-    plt.show()
-
 def generate_reply_seq2seq(encoder, decoder, tokenizer, input_msg, in_seq_length, out_seq_length):
     '''
     Generates a reply for a trained sequence to sequence model using greedy search 

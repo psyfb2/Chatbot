@@ -7,6 +7,8 @@ import string
 import pickle
 import re
 import os
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
 from keras.utils import to_categorical
@@ -178,6 +180,23 @@ def generate_segment_array(sentence, pad_length, no_persona=False):
         segment.append(0)
             
     return segment
+
+def plot_attention(attn_weights, message, reply):
+    ''' Visualize attention weights from seq2seq attention '''
+    fig = plt.figure(figsize=(15, 15))
+    axis = fig.add_subplot(1, 1, 1)
+    
+    axis.matshow(attn_weights, cmap='viridis')
+    
+    font_size = {'fontsize' : 12}
+    
+    axis.set_xticklabels([''] + message.split(' '), fontdict=font_size, rotation=90)
+    axis.set_yticklabels([''] + reply.split(' '), fontdict=font_size)
+    
+    axis.xaxis.set_major_locator(ticker.MultipleLocator(1))
+    axis.yaxis.set_major_locator(ticker.MultipleLocator(1))
+
+    plt.show()
 
 def remove_contractions(sentence):
     sentence = re.sub(r"won\'t", "will not", sentence)

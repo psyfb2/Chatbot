@@ -10,54 +10,36 @@ import seq2seq_model as seq2seq
 import autoencoder_model as autoenc
 import multiple_encoders as multenc
 import tensorflow as tf
-
-''' Evaluate a model by calculating Perplexity and F1 score '''
-def evaluate_by_auto_metrics(model, sources, dataset_not_encoded, tokenizer, verbose=1):
-    target_sentences = []
-    predicted_sentences = []
+from multiple_encoders import ChatBot as me_chatbot
     
-    for i, source in enumerate(sources):
-        source = source.reshape((1, source.shape[0]))
-        # source is a row vector of encoded integers, predict it using the model
-        pred = pre.predict_sequence(model, tokenizer, source)
-        
-        # get the real plain text for the source sentence and target sentence
-        target, src = dataset_not_encoded[i]
-        
-        if verbose == 1 and i < 15:
-            print('msg=[%s], reply=[%s], predicted=[%s]' % (src, target, pred))
-        target_sentences.append(target)
-        predicted_sentences.append(pred)
-
-
-def reply(tokenizer, persona, input_msg, max_persona_length, max_message_length, max_reply_length, model=None, encoder_model=None, decoder_model=None, include_greedy_search=False, plot_attn=False, beam_width=3):
-    ''' 
-    Generate a list of reply's from most likely to least
-    given an input_msg (not included prepended persona)
+def input_number(prompt, limit):
     '''
-    input_msg = pre.clean_line(input_msg)
-    
-    if model != None:
-        # use auto encoder model, does not take into account persona
-        return [autoenc.generate_reply_autoencoder(model, tokenizer, input_msg, max_message_length)]
-    
-    elif encoder_model != None and decoder_model != None:
-        # use seq2seq model, prepend persona to input message
-        input_msg = persona + ' ' + pre.SEP_SEQ_TOKEN + ' ' + input_msg
+    Get a number from the user between 0 - limit
+
+    Parameters
+    ----------
+    limit : int
+        max number allowed.
+    prompt: str
+        text to show the user.
+
+    Returns
+    -------
+    int
+        number entered by the user.
+
+    '''
+    while True:
+        try:
+            i = int(input(prompt))
+        except Exception:
+            print("Please only provide integer input")
         
-        # beam search
-        replys = seq2seq.beam_search_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, max_persona_length + max_message_length, max_reply_length, beam_width)
+        if i < 0 or i > limit:
+            print("Please enter an integer between 1 and %d" % limit)
+            continue
         
-        # greedy search
-        if plot_attn or include_greedy_search:
-            reply, attn_weights = seq2seq.generate_reply_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, max_persona_length + max_message_length, max_reply_length)
-            # return beam search reply's with greeding search reply appended at the end
-            replys.append(reply)
-            
-            if plot_attn:
-                seq2seq.plot_attention(attn_weights[:len(reply.split(' ')), :len(input_msg.split(' '))], input_msg, reply)
-        
-        return replys
+        return i
     
 def str2bool(s):
     if isinstance(s, bool):
@@ -181,50 +163,45 @@ if __name__ == '__main__':
             pass
 
     if args.talk != None:
-        model = None
-        encoder_model = None
-        decoder_model = None
-        vocab, persona_length, msg_length, reply_length = pre.get_vocab()
-        tokenizer = pre.fit_tokenizer(vocab)
-        
         if args.talk == model_choices[0]:
-            model = tf.keras.models.load_model(pre.AUTOENC_MODEL_FN)
+            # autoencoder model wasn't good at all so leave it out for now
+            pass
         
         elif args.talk == model_choices[1]:
-            encoder_model = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_MODEL_FN)
-            decoder_model = tf.saved_model.load(pre.SEQ2SEQ_DECODER_MODEL_FN)
+            pass
             
         elif args.talk == model_choices[2]:
-            encoder_model = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_DEEP_MODEL_FN)
-            decoder_model = tf.saved_model.load(pre.SEQ2SEQ_DECODER_DEEP_MODEL_FN)
-        
-        elif args.talk == model_choices[3]:
             pass
+    
+        elif args.talk == model_choices[3]:
+            chatbot = me_chatbot(deep_model=False)
         
         elif args.eval == model_choices[4]:
-            pass
+            chatbot = me_chatbot(deep_model=True)
         
         elif args.eval == model_choices[5]:
             pass
         
         persona, _ = pre.load_dataset(pre.TRAIN_FN)
-        persona = persona[0]
+        
+        persona_num = input_number("Please choose a persona number between 0 - %d: " % (len(persona) - 1),
+                                   len(persona) - 1)
+        persona = persona[persona_num]
+        print("Persona: %s\n" % persona)
+        
         print("Talking with %s model, enter <exit> to close this program\n" % args.talk)
-        print("Persona: %s" % persona)
         
         while True:
-            msg = input("Enter your message: ")
+            msg = input("Message: ")
             
             if msg == "<exit>":
                 break
             
-            responses = reply(tokenizer, persona, msg, persona_length, msg_length, reply_length, model, encoder_model, decoder_model, args.include_greedy_search, args.plot_attention, args.beam_width)
+            msg = pre.clean_line(msg)
+            reply = chatbot.reply(persona, msg)
+            print(reply, "\n")
+
             
-            print("Reply: %s" % (responses[0]))
-            
-            if args.show_beams or args.include_greedy_search:
-                for i in range(1, len(responses)):
-                    print("Reply %d: %s" % (i + 1, responses[i]))
-                
-            print("\n")
+        
+        
         
