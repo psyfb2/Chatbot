@@ -17,6 +17,7 @@ PROJ_PATH = os.path.abspath(os.path.join(os.path.dirname( __file__ ), os.pardir)
 
 TRAIN_FN            = os.path.join(PROJ_PATH, 'data', 'train_self_original_no_cands.txt')
 VALID_FN            = os.path.join(PROJ_PATH, 'data', 'valid_self_original_no_cands.txt')
+TEST_FN             = os.path.join(PROJ_PATH, 'data', 'test_self_original_no_cands.txt')
 MOVIE_FN            = os.path.join(PROJ_PATH, 'data', 'movie_lines.txt')
 DAILYDIALOGUE_FN    = os.path.join(PROJ_PATH, 'data', 'dialogues_text.txt')
 VOCAB_FN            = os.path.join(PROJ_PATH, 'data', 'vocab.txt')

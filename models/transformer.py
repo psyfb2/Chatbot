@@ -4,6 +4,7 @@
 """
 import tensorflow as tf
 import numpy as np
+import evaluate
 import matplotlib.pyplot as plt
 import text_preprocessing as pre
 import tensorflow_datasets as tfds
@@ -328,7 +329,7 @@ class Transformer(tf.keras.Model):
         msg shape     => (batch_size, in_seq_length)
         segment shape => (batch_size, in_seq_length)
         reply shape   => (batch_size, out_seq_length)
-        output shape  => (batch_size, out_seq_length, vocab_size)t
+        output shape  => (batch_size, out_seq_length, vocab_size)
         '''
         msg, segment, reply, is_training, enc_mask, look_ahead_mask, dec_mask = inputs
         
@@ -759,56 +760,21 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
         print("Persona:", raw_persona[i])
         print("Message:", raw_msg[i])
         print("Reply:", reply, "\n")
-        
+    
     
 
-def load_saved_transformer():
-    '''
-    Load Transformer from checkpoint file
-    
-    Parameters
-    ----------
-    vocab_size : tokenizer vocab size (including SOS, EOS, SEP tokens)
+'''
+Tried to convert generate_reply_transformer into a tf.function
+so it can be used directly in TF serving, but tf.function
+only supports TF ops :( so it's just not possible to do
+the tokenization or any non-trivial preprocessing in a tf.function
+Solution: make a new tf.function that takes a preprocessed tensor for
+the input and does the input feeding logic and export as a graph.
+TF serving will use that graph and wrap the serving around Flask server
+which will do the preprocessing.
+https://github.com/tensorflow/serving/issues/663
+'''
 
-    Returns
-    -------
-    transformer : Transformer object, None if no checkpoints were found
-    optimizer : Adam optimizer
-    out_seq_length: max reply length which the Transformer was trained on
-    '''
-    try:
-        tokenizer = tfds.features.text.SubwordTextEncoder.load_from_file(
-            pre.TRANSFORMER_TOKENIZER_FN)
-        out_seq_length = 24
-    except Exception:
-        print("Couldn't find tokenizer at %s" % pre.TRANSFORMER_TOKENIZER_FN)
-        print("Building a new one")
-        tokenizer, _, out_seq_length = create_subword_tokenizer()
-    
-    vocab_size = tokenizer.vocab_size + 3
-        
-    transformer = Transformer(D_MODEL, NUM_LAYERS, NUM_HEADS, D_FF,
-                              vocab_size, vocab_size, vocab_size, 
-                              True, DROPOUT)
-    
-    optimizer = tf.keras.optimizers.Adam(TransformerSchedule(D_MODEL), 
-                                         beta_1=0.9, beta_2=0.98, 
-                                         epsilon=1e-9)
-    
-    ckpt = tf.train.Checkpoint(transformer=transformer, optimizer=optimizer)
-    manager = tf.train.CheckpointManager(ckpt, pre.TRANSFORMER_CHECKPOINT_PATH,
-                                         max_to_keep=3)
-    
-    ckpt.restore(manager.latest_checkpoint).expect_partial()
-    if manager.latest_checkpoint:
-        print("Sucessfully loaded Transformer from file")
-        return transformer, optimizer, out_seq_length
-    else:
-        print("Couldn't find Transformer at %s have you trained?" % 
-              pre.TRANSFORMER_CHECKPOINT_PATH)
-        return None, None, out_seq_length
-    
-    
 def generate_reply_transformer(persona, msg, tokenizer, transformer, max_reply_length):
     ''' Generates Transformer reply and attention weights '''
     no_persona = False
@@ -848,19 +814,113 @@ def generate_reply_transformer(persona, msg, tokenizer, transformer, max_reply_l
     reply = tokenizer.decode([i for i in out_seq if i < tokenizer.vocab_size + SOS])
     return reply, attn_weights
 
-train_transformer(100, 32, 100, 100)
+
+
+class ChatBot(evaluate.BaseBot):
+    def __init__(self):
+        '''
+        Use this class from the outside for interaction and evaluation.
+
+        Returns
+        -------
+        None
+
+        '''
+        try:
+            self.tokenizer = tfds.features.text.SubwordTextEncoder.load_from_file(
+                pre.TRANSFORMER_TOKENIZER_FN)
+            self.out_seq_length = 24
+        except Exception:
+            print("Couldn't find tokenizer at %s" % pre.TRANSFORMER_TOKENIZER_FN)
+            print("Building a new one")
+            self.tokenizer, _, self.out_seq_length = create_subword_tokenizer()
+        
+        self.vocab_size = self.tokenizer.vocab_size + 3
+        
+        self.last_input = None
+        self.last_attn_dict = None
+        self.last_reply = None
+            
+        self.transformer = Transformer(D_MODEL, NUM_LAYERS, NUM_HEADS, D_FF,
+                                      self.vocab_size, self.vocab_size, self.vocab_size, 
+                                      True, DROPOUT)
+        
+        optimizer = tf.keras.optimizers.Adam(TransformerSchedule(D_MODEL), 
+                                             beta_1=0.9, beta_2=0.98, 
+                                             epsilon=1e-9)
+        
+        ckpt = tf.train.Checkpoint(transformer=transformer, optimizer=optimizer)
+        manager = tf.train.CheckpointManager(ckpt, pre.TRANSFORMER_CHECKPOINT_PATH,
+                                             max_to_keep=3)
+        
+        ckpt.restore(manager.latest_checkpoint).expect_partial()
+        if manager.latest_checkpoint:
+            # sucessfully loaded transformer
+            pass
+        else:
+            raise FileNotFoundError("Could find transformer checkpoint at", pre.TRANSFORMER_CHECKPOINT_PATH)
+
     
-'''
-Tried to convert generate_reply_transformer into a tf.function
-so it can be used directly in TF serving, but tf.function
-only supports TF ops :( so it's just not possible to do
-the tokenization or any non-trivial preprocessing in a tf.function
-Solution: make a new tf.function that takes a preprocessed tensor for
-the input and does the input feeding logic and export as a graph.
-TF serving will use that graph and wrap the serving around Flask server
-which will do the preprocessing.
-https://github.com/tensorflow/serving/issues/663
-'''
+    def reply(self, persona, message):
+        '''
+        Generate a reply using the saved model
+
+        Parameters
+        ----------
+        persona : str
+            persona description
+        message : str
+            message
+
+        Returns
+        -------
+        str
+            reply
+
+        '''
+        self.last_reply, self.last_attn_dict = generate_reply_transformer(persona, msg,
+                                                                          self.tokenizer, 
+                                                                          self.transformer, 
+                                                                          self.out_seq_length)
+        return self.last_reply
+    
+    def plot_attn(self):
+        '''
+        Plot attention for the last generated reply
+
+        Returns
+        -------
+        None.
+
+        '''
+        pass
+    
+    def eval_f1(self):
+        '''
+        Get test set F1 score: 2 . (precision * recall) / (precision + recall)
+        where an F1 score is calculated for each reply and summed
+        Note: this can take some time
+
+        Returns
+        -------
+        float
+            summed F1 score
+
+        '''
+        pass
+            
+    
+    def eval_ppl(self):
+        '''
+        Get test set perplexity
+        Note: this can take some time
+        
+        Returns
+        -------
+           float
+               perplexity meassure
+        '''
+        pass
 
 if __name__ == "__main__":
     # do some tests to ensure Encoder and Decoder have correct dimensionality

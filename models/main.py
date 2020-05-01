@@ -60,22 +60,22 @@ if __name__ == '__main__':
                         help="Name of the model to train")
     
     parser.add_argument("--batch_size", default=64, type=int,
-                        help="Batch size for training, default = 64")
+                        help="Batch size for training")
     
     parser.add_argument("--epochs", default=100, type=int,
-                        help="epochs for training on PERSONA-CHAT dataset, default = 100")
+                        help="epochs for training on PERSONA-CHAT dataset")
     
-    parser.add_argument("--early_stopping_patience", default=15, type=int,
-                        help="number of consecutive epochs without improvement over validation loss minimum until training is stopped early, default = 15")
+    parser.add_argument("--early_stopping_patience", default=5, type=int,
+                        help="number of consecutive epochs without improvement over validation loss minimum until training is stopped early, default = 5")
     
     parser.add_argument("--segment_embedding", default=True, type=str2bool,
-                        help="Whether or not to add an additional segment embedding to seq2seq models so that it can better distiguish persona from message. Only applies to seq2seq and deep_seq2seq, default = True")
+                        help="Whether or not to add an additional segment embedding to seq2seq models so that it can better distiguish persona from message.")
     
-    parser.add_argument("--perform_pretraining", default=True, type=str2bool,
-                        help="Perform pretraining on movie, dialy dialog datasets? default = True")
+    parser.add_argument("--perform_pretraining", default=False, type=str2bool,
+                        help="Perform pretraining on movie, dialy dialog datasets? default = False")
     
-    parser.add_argument("--verbose", default=1, type=int,
-                        help="Display loss for each batch during training, default = 0")
+    parser.add_argument("--verbose", default=0, type=int,
+                        help="Display loss for each batch during training")
     
     parser.add_argument("--min_epochs", default=0, type=int,
                         help="a minimum number of epochs which the model must be trained for on the PERSONA-CHAT dataset regardless of early stopping, default = 0")

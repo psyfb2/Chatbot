@@ -2,6 +2,7 @@
 """
 @author: Fady Benattayallah
 """
+import evaluate
 import numpy as np
 import text_preprocessing as pre
 import tensorflow as tf
@@ -300,7 +301,7 @@ class DeepMultipleDecoder(tf.keras.Model):
     
 def loss_function(label, pred, loss_object):
     '''
-    Calculate loss for a single prediction
+    Calculate mean batch loss for a single timestep
     '''
     # do not calculate loss for padding values
     mask = tf.math.logical_not(tf.math.equal(label, 0))
@@ -409,8 +410,6 @@ def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encode
             print("Early stopping, no improvement over minimum in %d epochs" % PATIENCE)
             return epoch + 1
     
-    print("Saving model as all %d epochs have been completed" % EPOCHS)
-    save_seq2seq(encoder, decoder, deep_lstm)
     return EPOCHS            
 
 def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, pre_train=True):
@@ -466,7 +465,9 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
         
         encoder_persona_input, encoder_msg_input, decoder_target = None, None, None
         
-        epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, 0, PATIENCE)
+        epochs = train(dataset, None, batches_per_epoch, None, 
+                       encoder, decoder, tokenizer, loss_func, optimizer, False, 
+                       deep_lstm, BATCH_SIZE, movie_epochs, 0, PATIENCE)
         
         print("Finished Pre-training on Movie dataset for %d epochs" % epochs)
         
@@ -501,7 +502,9 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
         
         encoder_persona_input, encoder_msg_input, decoder_target = None, None, None
         
-        epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, 0, PATIENCE)
+        epochs = train(dataset, None, batches_per_epoch, None, 
+                       encoder, decoder, tokenizer, loss_func, optimizer, False, 
+                       deep_lstm, BATCH_SIZE, daily_epochs, 0, PATIENCE)
         
         print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
         
@@ -513,53 +516,19 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
         # ------ ------ #
 
     # ------ Train on PERSONA-CHAT ------ #
-    train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
+    dataset, num_examples, persona_raw, msg_raw = data_pipeline(
+        pre.TRAIN_FN, tokenizer, persona_length, msg_length, reply_length, BATCH_SIZE)
     
-    # train is a numpy array containing triples [message, reply, persona_index]
-    # personas is an numpy array of strings for the personas
-    encoder_persona_input  = np.array([train_personas[int(row[2])] for row in train_data])
-    encoder_msg_input = train_data[:, 0]
-    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in train_data])
     
-    train_data, train_personas = None, None
+    val_dataset, num_examples_val, persona_raw_val, msg_raw_val = data_pipeline(
+        pre.VALID_FN, tokenizer, persona_length, msg_length, reply_length, BATCH_SIZE)
     
-    persona_raw = encoder_persona_input[:20]
-    msg_raw = encoder_msg_input[:20]
-    
-    # integer encode training data
-    encoder_persona_input  = pre.encode_sequences(tokenizer, persona_length, encoder_persona_input)
-    encoder_msg_input = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
-    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
-    
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target)).shuffle(BUFFER_SIZE)
-    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
-    batches_per_epoch = len(encoder_persona_input) // BATCH_SIZE
-    
-    encoder_persona_input, encoder_msg_input, decoder_target = None, None, None
-    
-    # load the validation set
-    val_personas, val_data = pre.load_dataset(pre.VALID_FN)
-    
-    encoder_persona_input  = np.array([val_personas[int(row[2])] for row in val_data])
-    encoder_msg_input = val_data[:, 0]
-    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in val_data])
-    
-    val_data, val_personas = None, None
-    
-    persona_raw_val = encoder_persona_input[:20]
-    msg_raw_val = encoder_msg_input[:20]
-    
-    encoder_persona_input  = pre.encode_sequences(tokenizer, persona_length, encoder_persona_input)
-    encoder_msg_input = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
-    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
-    
-    val_dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
-    val_dataset = val_dataset.batch(BATCH_SIZE, drop_remainder=True)
-    batches_per_epoch_val = len(encoder_persona_input) // BATCH_SIZE
-    
-    encoder_persona_input, encoder_msg_input, decoder_target = None, None, None
-    
-    epochs = train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE)
+    batches_per_epoch = num_examples // BATCH_SIZE
+    batches_per_epoch_val = num_examples_val // BATCH_SIZE
+
+    epochs = train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, 
+                   encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, 
+                   BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE)
     
     print("Finished Training on PERSONA-CHAT for %d epochs" % epochs)
     
@@ -578,6 +547,28 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
         print("Message:", msg_raw_val[i])
         print("Reply:", reply + "\n")
     # ------ ------ #
+        
+def data_pipeline(filename, tokenizer, persona_length, msg_length, out_seq_length, BATCH_SIZE, drop_remainder=True):
+    ''' Load and integer encode persona chat dataset '''
+    personas, data = pre.load_dataset(filename)
+    
+    encoder_persona_input  = np.array([personas[int(row[2])] for row in data])
+    encoder_msg_input = data[:, 0]
+    decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in data])
+    
+    persona_raw = encoder_persona_input[:20]
+    msg_raw = encoder_msg_input[:20]
+    
+    encoder_persona_input  = pre.encode_sequences(tokenizer, persona_length, encoder_persona_input)
+    encoder_msg_input = pre.encode_sequences(tokenizer, msg_length, encoder_msg_input)
+    decoder_target = pre.encode_sequences(tokenizer, out_seq_length, decoder_target)
+    
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_persona_input, encoder_msg_input,  decoder_target))
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=drop_remainder)
+    
+    num_examples = len(encoder_persona_input)
+    
+    return dataset, num_examples, persona_raw, msg_raw
 
 def save_seq2seq(encoder, decoder, deep_lstm):
     ''' Save the encoder and decoder as tensorflow models to file '''
@@ -651,7 +642,7 @@ def generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona, msg, p
     return " ".join(reply), persona_attn_weights, msg_attn_weights
 
 
-class ChatBot():
+class ChatBot(evaluate.BaseBot):
     def __init__(self, deep_model):
         '''
         Use this class from the outside for interaction and evaluation.
@@ -669,8 +660,8 @@ class ChatBot():
         vocab, self.persona_length, self.msg_length, self.reply_length = pre.get_vocab()
         self.tokenizer = pre.fit_tokenizer(vocab)
         if deep_model:
-            self.encoder = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_DEEP_MODEL_FN)
-            self.decoder = tf.saved_model.load(pre.SEQ2SEQ_DECODER_DEEP_MODEL_FN)
+            self.encoder = tf.saved_model.load(pre.MULTIENC_ENCODER_DEEP_MODEL_FN)
+            self.decoder = tf.saved_model.load(pre.MULTIENC_DECODER_DEP_MODEL_FN)
         else:
             self.encoder = tf.saved_model.load(pre.MULTIENC_ENCODER_MODEL_FN)
             self.decoder = tf.saved_model.load(pre.MULTIENC_DECODER_MODEL_FN)
@@ -723,12 +714,69 @@ class ChatBot():
         '''
         if self.persona_attn_weights == None:
             return
-        
         pre.plot_attention(self.persona_attn_weights, self.last_persona, self.last_reply)
         pre.plot_attention(self.msg_attn_weights, self.last_msg, self.last_reply)
     
     def eval_f1(self):
-        pass
+        '''
+        Get test set F1 score: 2 . (precision * recall) / (precision + recall)
+        where an F1 score is calculated for each reply and summed
+        Note: this can take some time
+
+        Returns
+        -------
+        float
+            summed F1 score
+
+        '''
+        get_reply = (lambda persona, msg : 
+                     generate_reply_multiple_encoder(self.encoder, self.decoder,
+                                                     self.tokenizer, persona,
+                                                     msg, self.persona_length,
+                                                     self.msg_length, self.reply_length)[0])
+        return evaluate.f1(get_reply)
+            
     
     def eval_ppl(self):
-        pass
+        '''
+        Get test set perplexity
+        Note: this can take some time
+        
+        Returns
+        -------
+           float
+               perplexity meassure
+        '''
+        # perplexity is equivalant to cross entropy loss over all timesteps
+        # over all training examples / number of training examples
+        # not raising to the power of two in this meassure of perplexity
+        # to prevent return value from being huge
+        # but stil has the exactly the same scope for comparison
+        # without exponentiation
+        batch_size = 256
+        dataset, num_examples, _, _ = data_pipeline(
+        pre.TEST_FN, self.tokenizer, self.persona_length, 
+        self.msg_length, self.reply_length, batch_size, False)
+
+        ppl = 0
+        for (persona, msg, decoder_target) in dataset:
+            encoder_persona_states, encoder_msg_states, *initial_state = self.encoder(
+                [persona, msg])
+            
+            decoder_input = tf.expand_dims(
+                [self.tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_persona_states.shape[0], 1)
+            context_vec_concat = tf.zeros(
+                (encoder_persona_states.shape[0], encoder_persona_states.shape[-1] + encoder_msg_states.shape[-1]))
+        
+            for t in range(1, decoder_target.shape[1]):
+                predictions, _, _, context_vec_concat, *initial_state = self.decoder(
+                    [decoder_input, encoder_persona_states, encoder_msg_states, 
+                     context_vec_concat, False, initial_state])
+                
+                ppl += evaluate.CCE_loss(decoder_target[:, t], predictions)
+                
+                decoder_input = tf.expand_dims(decoder_target[:, t], 1)
+    
+        ppl = ppl / num_examples
+        return ppl.numpy()    
+    

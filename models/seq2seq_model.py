@@ -5,9 +5,8 @@
 import numpy as np
 import text_preprocessing as pre
 import tensorflow as tf
+import evaluate
 from time import time
-from math import log
-from copy import copy
 from functools import reduce
 from tensorflow.keras.losses import SparseCategoricalCrossentropy
 from tensorflow.keras.layers import LSTM, Dense, Embedding, Bidirectional, Dropout
@@ -349,8 +348,6 @@ def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encode
             print("Early stopping, no improvement over minimum in %d epochs" % PATIENCE)
             return epoch + 1
         
-    print("Saving model as all %d epochs have been completed" % EPOCHS)
-    save_seq2seq(encoder, decoder, deep_lstm)
     return EPOCHS   
             
 
@@ -451,50 +448,15 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
     
 
     # ------ Train on PERSONA-CHAT ------ #
-    train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
-    
-    # train is a numpy array containing triples [message, reply, persona_index]
-    # personas is an numpy array of strings for the personas
-
-    encoder_input  = np.array(
-        [pre.truncate(train_personas[int(row[2])], persona_length) + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in train_data])
-    decoder_target = np.array(
-        [pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in train_data])
-    
-    train_data, train_personas = None, None
-    
-    raw = encoder_input[:20]
-    
-    # integer encode training data
-    segment_input  = np.array([pre.generate_segment_array(msg, persona_length + msg_length) for msg in encoder_input])
-    encoder_input  = pre.encode_sequences(tokenizer, persona_length + msg_length, encoder_input)
-    decoder_target = pre.encode_sequences(tokenizer, reply_length, decoder_target)
-    
-    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, segment_input,  decoder_target)).shuffle(BUFFER_SIZE)
-    dataset = dataset.batch(BATCH_SIZE, drop_remainder=True)
-    batches_per_epoch = len(encoder_input) // BATCH_SIZE
-    
-    encoder_input, segment_input, decoder_target = None, None, None
+    dataset, num_examples, raw = data_pipeline(pre.TRAIN_FN, tokenizer, persona_length,
+                                               msg_length, reply_length, BATCH_SIZE)
     
     # load validation set
-    val_personas, val_data = pre.load_dataset(pre.VALID_FN)
+    val_dataset, num_examples_val, val_raw = data_pipeline(pre.TRAIN_FN, tokenizer, persona_length,
+                                               msg_length, reply_length, BATCH_SIZE)
     
-    encoder_input  = np.array(
-        [pre.truncate(val_personas[int(row[2])], persona_length) + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in val_data])
-    decoder_target = np.array(
-        [pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in val_data])
-    
-    val_personas, val_data = None, None
-    
-    val_raw = encoder_input[:20]
-    
-    segment_input  = np.array([pre.generate_segment_array(msg, persona_length + msg_length) for msg in encoder_input])
-    encoder_input  = pre.encode_sequences(tokenizer, persona_length + msg_length, encoder_input)
-    decoder_target = pre.encode_sequences(tokenizer, reply_length, decoder_target)
-    
-    val_dataset = tf.data.Dataset.from_tensor_slices((encoder_input, segment_input,  decoder_target)).shuffle(BUFFER_SIZE)
-    val_dataset = val_dataset.batch(BATCH_SIZE, drop_remainder=True)
-    val_batches_per_epoch = len(encoder_input) // BATCH_SIZE
+    batches_per_epoch = num_examples // BATCH_SIZE
+    val_batches_per_epoch = num_examples_val // BATCH_SIZE
     
     epochs = train(dataset, val_dataset, batches_per_epoch, val_batches_per_epoch, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE)
     
@@ -511,6 +473,30 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
         print("Message:", val_raw[i])
         print("Reply:", reply + "\n")
     # ------ ------ #
+
+def data_pipeline(filename, tokenizer, persona_length, msg_length, reply_length, BATCH_SIZE, drop_remainder=True):
+    # ------ Train on PERSONA-CHAT ------ #
+    personas, data = pre.load_dataset(filename)
+    
+    BUFFER_SIZE = 15000
+
+    encoder_input  = np.array(
+        [pre.truncate(personas[int(row[2])], persona_length) + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in data])
+    decoder_target = np.array(
+        [pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in data])
+        
+    raw = encoder_input[:20]
+    
+    # integer encode training data
+    segment_input  = np.array([pre.generate_segment_array(msg, persona_length + msg_length) for msg in encoder_input])
+    encoder_input  = pre.encode_sequences(tokenizer, persona_length + msg_length, encoder_input)
+    decoder_target = pre.encode_sequences(tokenizer, reply_length, decoder_target)
+    
+    dataset = tf.data.Dataset.from_tensor_slices((encoder_input, segment_input,  decoder_target)).shuffle(BUFFER_SIZE)
+    dataset = dataset.batch(BATCH_SIZE, drop_remainder=drop_remainder)
+    num_examples = len(encoder_input)
+    
+    return dataset, num_examples, raw
 
 
 def save_seq2seq(encoder, decoder, deep_lstm):
@@ -585,121 +571,126 @@ def generate_reply_seq2seq(encoder, decoder, tokenizer, input_msg, in_seq_length
     return " ".join(reply), attn_weights
 
 
-def beam_search_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_seq_length, out_seq_length, beam_length = 3):
-    ''' Generates a reply for a trained sequence to sequence model using beam search '''
-    
-    '''
-    No built in implementation of beam search for keras models so build our own, works by
-    1. find beam length most likely next words for each of previous beam length
-       network fragments
-       
-    2. find most likely beam length words from (beam length * vocab_size) possibilities
-       using summed log likelihood probability
-    
-    3. save hidden state, ascociated output tokens and current probability
-       for each most likely beam length token
-    
-    4. if the output token is EOS or out_seq_length reached make this beam a dead end
-    
-    5. repeat until all beams are dead ends
-    
-    6. pick most likely beam lenght sequences according to length normalized
-       log likelihood objective function
-    '''
-    input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
-    input_seq = tf.convert_to_tensor(input_seq)
-    
-    segment_input  = np.array([pre.generate_segment_array(input_msg, in_seq_length)])
-    segment_input  = tf.convert_to_tensor(segment_input)
-    
-    encoder_out, *initial_state = encoder_model([input_seq, segment_input])
-    
-    context_vec = tf.zeros((encoder_out.shape[0], encoder_out.shape[-1]))
-    
-    # beams will store [ [probability, states, context_vec, word1, word2, ...], ... ]
-    beams = [ [0.0, initial_state, context_vec, pre.START_SEQ_TOKEN] for i in range(beam_length)]
-    
-    prob = 0
-    initial_state = 1
-    context_vec = 2
-    
-    # store beam length ^ 2 most likely words [ [probability, word_index, beam_index], ... ]
-    most_likely_words_all = [[0.0, 0, 0] for i in range(beam_length * beam_length)]
-    
-    beam_finished = lambda b : b[-1] == pre.END_SEQ_TOKEN or len(b) - context_vec - 1 >= out_seq_length
-    while not reduce(lambda a, b : a and b , map(beam_finished, beams)):
-    
-        # find beam length most likely words out of all beams (vocab_size * beam length possibilities)
-        for b_index in range(len(beams)):
-            b = beams[b_index]
-            prev_word = b[-1]
-            
-            if prev_word == pre.END_SEQ_TOKEN:
-                # dead end beam so don't generate a new token, update states 
-                # and leave most_likely_words for this beam constant
-                continue
-            
-            decoder_input = tf.expand_dims([tokenizer.word_index[prev_word]], 0)
-            out_softmax_layer, _, b[context_vec], *b[initial_state] = decoder_model([decoder_input, encoder_out, b[context_vec], b[initial_state]])
-            
-            # store beam length most likely words and there probabilities for this beam
-            out_softmax_layer = tf.nn.softmax(out_softmax_layer[0]).numpy()
-            most_likely_indicies = out_softmax_layer.argsort()[-beam_length:][::-1]
-            
-            i_ = 0
-            for i in range(beam_length * b_index, beam_length * (b_index + 1) ):
-                # summed log likelihood probability
-                most_likely_words_all[i][0] = b[prob] + log(
-                    out_softmax_layer[most_likely_indicies[i_]]) 
-                
-                # word_index in tokenizer
-                most_likely_words_all[i][1] = most_likely_indicies[i_]
-                
-                # beam index
-                most_likely_words_all[i][2] = b_index
-                i_ += 1
-            
-        if prev_word == pre.START_SEQ_TOKEN:
-            # on first run of beam search choose beam length most likely unique words
-            # as this will prevent simply running greedy search beam length times
-            most_likely_words = most_likely_words_all[:beam_length]
+class ChatBot(evaluate.BaseBot):
+    def __init__(self, deep_model):
+        '''
+        Use this class from the outside for interaction and evaluation.
+
+        Parameters
+        ----------
+        deep_model : boolean
+            Load shallow or stacked trained model
+
+        Returns
+        -------
+        None
+
+        '''
+        vocab, self.persona_length, self.msg_length, self.reply_length = pre.get_vocab()
+        self.tokenizer = pre.fit_tokenizer(vocab)
+        if deep_model:
+            self.encoder = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_DEEP_MODEL_FN)
+            self.decoder = tf.saved_model.load(pre.SEQ2SEQ_DECODER_DEEP_MODEL_FN)
         else:
-            # chose beam length most likely words out of beam length ^ 2 possible words
-            # by their length normalized log likelihood probabilities descending
-            # using a beam penalty of 1.0
-            most_likely_words = sorted(
-                most_likely_words_all, key = lambda l:l[0] / (len(beams[l[2]]) - context_vec - 1), reverse=True)[:beam_length]
+            self.encoder = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_MODEL_FN)
+            self.decoder = tf.saved_model.load(pre.SEQ2SEQ_DECODER_MODEL_FN)
         
-            # most_likely_words must remain constant for dead end beams
-            # so make sure index in most_likely_words == b_index for dead end beams
-            for i in range(len(most_likely_words)):
-                if beams[most_likely_words[i][2]][-1] == pre.END_SEQ_TOKEN and i != most_likely_words[i][2]:
-                    # swap index of dead end in beams with i in most_likely_words
-                    temp = most_likely_words[i]
-                    most_likely_words[i] = most_likely_words[most_likely_words[i][2]]
-                    most_likely_words[most_likely_words[i][2]] = temp
-                    
-            
-        # save network fragments for the most likely words
-        temp_beams = [[] for i in range(beam_length)]
-        for i in range(len(most_likely_words)):
-            old_beam = copy(beams[most_likely_words[i][2]])
-            old_beam[prob] = most_likely_words[i][0]
-            
-            # prevent EOS token being continually appended for dead end beams
-            if old_beam[-1] != pre.END_SEQ_TOKEN:
-                old_beam.append(pre.index_to_word(most_likely_words[i][1], tokenizer))
-            
-            # beam state was already saved in the first step
-            
-            temp_beams[i] = old_beam
-            
-        beams = temp_beams
+        # for plotting attention
+        self.attn_weights = None
+        self.last_input = None
+        self.last_reply = None
+        
     
-    # sort beams by length normalized log likelihood descending and only keep text
-    replys = [" ".join(b[context_vec + 2:-1]) 
-              for b in sorted(beams, key = lambda b:b[0] / (len(b) - context_vec - 1), reverse=True)]
+    def reply(self, persona, message):
+        '''
+        Generate a reply using the saved model
+
+        Parameters
+        ----------
+        persona : str
+            persona description
+        message : str
+            message
+
+        Returns
+        -------
+        str
+            reply
+
+        '''
+        self.last_input = persona + ' ' + pre.SEP_SEQ_TOKEN + ' ' + message
+        
+        reply, self.attn_weights = generate_reply_seq2seq(self.encoder, self.decoder,
+                                                          self.tokenizer, self.last_input,
+                                                          self.persona_length + self.msg_length,
+                                                          self.reply_length)
+                                                            
+        self.last_reply = reply
+        return self.last_reply
     
-    # return list of beam length reply's from most likely to least likely
-    return replys
+    def plot_attn(self):
+        '''
+        Plot attention for the last generated reply
+
+        Returns
+        -------
+        None.
+
+        '''
+        if self.attn_weights == None:
+            return
+        pre.plot_attention(self.attn_weights, self.last_input, self.last_reply)
     
+    def eval_f1(self):
+        '''
+        Get test set F1 score: 2 . (precision * recall) / (precision + recall)
+        where an F1 score is calculated for each reply and summed
+        Note: this can take some time
+
+        Returns
+        -------
+        float
+            summed F1 score
+
+        '''
+        get_reply = (lambda persona, msg : 
+                     generate_reply_seq2seq(self.encoder, self.decoder, self.tokenizer,
+                                            persona + ' ' + pre.SEP_SEQ_TOKEN + ' ' + msg,
+                                            self.persona_length + self.msg_length, 
+                                            self.reply_length))
+        return evaluate.f1(get_reply)
+            
+    
+    def eval_ppl(self):
+        '''
+        Get test set perplexity
+        Note: this can take some time
+        
+        Returns
+        -------
+           float
+               perplexity meassure
+        '''
+        batch_size = 256
+        dataset, num_examples, _ = data_pipeline(pre.TEST_FN, self.tokenizer,
+                                                 self.persona_length, self.msg_length,
+                                                 self.reply_length, batch_size, False)
+        ppl = 0
+        for (encoder_input, segment_input, decoder_target) in dataset:
+            encoder_outputs, *initial_state = self.encoder(
+                [encoder_input, segment_input])
+            
+            decoder_input = tf.expand_dims(
+                [self.tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_input.shape[0], 1)
+            context_vec = tf.zeros((encoder_outputs.shape[0], encoder_outputs.shape[-1]))
+        
+            for t in range(1, decoder_target.shape[1]):
+                predictions, _, context_vec, *initial_state = self.decoder(
+                    [decoder_input, encoder_outputs, context_vec, False, initial_state])
+                
+                ppl += evaluate.CCE_loss(decoder_target[:, t], predictions)
+                
+                decoder_input = tf.expand_dims(decoder_target[:, t], 1)
+    
+        ppl = ppl / num_examples
+        return ppl.numpy()
