@@ -13,7 +13,7 @@ from tensorflow.keras.layers import LSTM, Dense, Embedding, Bidirectional, Dropo
 from tensorflow.keras.optimizers import Adam
 
 LSTM_DIM = 512
-DROPOUT = 0.4
+DROPOUT = 0.0
 
 class Encoder(tf.keras.Model):
     ''' 1 Layer Bidirectional LSTM '''
@@ -39,18 +39,22 @@ class Encoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs => [input_utterence, segment_tokens]
+        inputs => [input_utterence, segment_tokens, initial_state]
         returns => encoder_states, h1, c1
         '''
-        input_utterence, segment_tokens = inputs
+        input_utterence, segment_tokens, initial_state = inputs
         input_embed = self.embedding(input_utterence)
         segment_embed = self.segment_embedding(segment_tokens)
         
         combined_embed = tf.add(input_embed, segment_embed)
         
-        encoder_states, h1, c1, _, _ = self.lstm1(combined_embed)
+        encoder_states, h1, c1, _, _ = self.lstm1(combined_embed, initial_state=[
+            initial_state, initial_state])
         
         return encoder_states, h1, c1
+    
+    def create_initial_state(self):
+        return tf.zeros((self.batch_size, self.n_units))
 
 
 class Decoder(tf.keras.Model):
@@ -148,22 +152,25 @@ class DeepEncoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs => [input_utterence, segment_tokens]
+        inputs => [input_utterence, segment_tokens, initial_state]
         returns: encoder_states, h1, c1, h2, c2, h3, c3, h4, c4
         '''
-        input_utterence, segment_tokens = inputs
+        input_utterence, segment_tokens, initial_state = inputs
         
         input_embed = self.embedding(input_utterence)
         segment_embed = self.segment_embedding(segment_tokens)
         
         combined_embed = tf.add(input_embed, segment_embed)
         
-        encoder_states, h1, c1, _, _ = self.lstm1(combined_embed)
-        encoder_states, h2, c2, _, _ = self.lstm2(encoder_states)
-        encoder_states, h3, c3, _, _ = self.lstm3(encoder_states)
-        encoder_states, h4, c4, _, _ = self.lstm4(encoder_states)
+        encoder_states, h1, c1, _, _ = self.lstm1(combined_embed, initial_state=[initial_state, initial_state])
+        encoder_states, h2, c2, _, _ = self.lstm2(encoder_states, initial_state=[initial_state, initial_state])
+        encoder_states, h3, c3, _, _ = self.lstm3(encoder_states, initial_state=[initial_state, initial_state])
+        encoder_states, h4, c4, _, _ = self.lstm4(encoder_states, initial_state=[initial_state, initial_state])
         
         return encoder_states, h1, c1, h2, c2, h3, c3, h4, c4
+    
+    def create_initial_state(self):
+        return tf.zeros((self.batch_size, self.n_units))
 
 
 class DeepDecoder(tf.keras.Model):
@@ -253,7 +260,9 @@ def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, l
     for (batch, (encoder_input, segment_input, decoder_target)) in enumerate(val_dataset.take(batches_per_epoch)):
         loss = 0
         
-        encoder_outputs, *initial_state = encoder([encoder_input, segment_input])
+        initial_state = encoder.create_initial_state()
+        encoder_outputs, *initial_state = encoder(
+            [encoder_input, segment_input, initial_state])
         
         decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_input.shape[0], 1)
         context_vec = tf.zeros((encoder_outputs.shape[0], encoder_outputs.shape[-1]))
@@ -280,7 +289,9 @@ def train_step(encoder_input, segment_input, decoder_target, encoder, decoder, l
     loss = 0
     
     with tf.GradientTape() as tape:
-        encoder_outputs, *initial_state = encoder([encoder_input, segment_input])
+        initial_state = encoder.create_initial_state()
+        encoder_outputs, *initial_state = encoder(
+            [encoder_input, segment_input, initial_state])
         
         decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * BATCH_SIZE, 1)
         context_vec = tf.zeros((encoder_outputs.shape[0], encoder_outputs.shape[-1]))
@@ -518,7 +529,8 @@ def save_seq2seq(encoder, decoder, deep_lstm):
     tf.saved_model.save(encoder, encoder_fn , signatures=encoder.call.get_concrete_function(
         [
             tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='input_utterence'),
-            tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='segment_tokens')
+            tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='segment_tokens'),
+            tf.TensorSpec(shape=[None, None], dtype=tf.int32, name="initial_state")
         ]
         ))
     
@@ -545,7 +557,8 @@ def generate_reply_seq2seq(encoder, decoder, tokenizer, input_msg, in_seq_length
     
     attn_weights = np.zeros((out_seq_length, in_seq_length))
     
-    encoder_out, *initial_state = encoder([input_seq, segment_input])
+    encoder_initial = [tf.zeros((1, LSTM_DIM))]
+    encoder_out, *initial_state = encoder([input_seq, segment_input, encoder_initial])
     
     decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]], 0)
     context_vec = tf.zeros((encoder_out.shape[0], encoder_out.shape[-1]))
