@@ -61,7 +61,7 @@ if __name__ == '__main__':
                         help="Name of the model to train")
     
     parser.add_argument("--batch_size", default=64, type=int,
-                        help="Batch size for training")
+                        help="Batch size for training. It is reccomended to use highest possible batch size for transformer (e.g. 256) .")
     
     parser.add_argument("--epochs", default=100, type=int,
                         help="epochs for training on PERSONA-CHAT dataset")

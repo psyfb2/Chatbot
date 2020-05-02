@@ -7,7 +7,6 @@ import text_preprocessing as pre
 import tensorflow as tf
 import evaluate
 from time import time
-from functools import reduce
 from tensorflow.keras.losses import SparseCategoricalCrossentropy
 from tensorflow.keras.layers import LSTM, Dense, Embedding, Bidirectional, Dropout
 from tensorflow.keras.optimizers import Adam
@@ -33,7 +32,7 @@ class Encoder(tf.keras.Model):
             # use a zero segment embedding which will have no effect on the model
             self.segment_embedding = Embedding(3, segment_embedding_dim, weights=[np.zeros((3, segment_embedding_dim))], trainable=False, mask_zero=True, name="segment_embedding")
         
-        self.lstm1 = LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm1")
+        self.lstm1 = Bidirectional(LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm1"))
         
     @tf.function
     def call(self, inputs):
@@ -47,7 +46,7 @@ class Encoder(tf.keras.Model):
         
         combined_embed = tf.add(input_embed, segment_embed)
         
-        encoder_states, h1, c1 = self.lstm1(combined_embed, initial_state=[initial_state, initial_state])
+        encoder_states, h1, c1, _, _ = self.lstm1(combined_embed, initial_state=[initial_state, initial_state, initial_state, initial_state])
         
         return encoder_states, h1, c1
     
@@ -134,17 +133,10 @@ class DeepEncoder(tf.keras.Model):
         else:
             self.segment_embedding = Embedding(3, segment_embedding_dim, weights=[np.zeros((3, segment_embedding_dim))], trainable=False, mask_zero=True, name="segment_embedding")
         
-        self.lstm1 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm1"), name="enc_lstm1_bi")
-        
-        self.lstm2 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm2"), name="enc_lstm2_bi")
-        
-        self.lstm3 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm3"), name="enc_lstm3_bi")
-        
-        self.lstm4 = Bidirectional(
-            LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm4"), name="enc_lstm4_bi")
+        self.lstm1 = Bidirectional(LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm1"))
+        self.lstm2 = Bidirectional(LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm2"))
+        self.lstm3 = Bidirectional(LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm3"))
+        self.lstm4 = Bidirectional(LSTM(n_units, return_sequences=True, return_state=True, recurrent_initializer="glorot_uniform", name="enc_lstm4"))
         
     @tf.function
     def call(self, inputs):
@@ -159,15 +151,15 @@ class DeepEncoder(tf.keras.Model):
         
         combined_embed = tf.add(input_embed, segment_embed)
         
-        encoder_states, h1, c1, _, _ = self.lstm1(combined_embed, initial_state=initial_state)
-        encoder_states, h2, c2, _, _ = self.lstm2(encoder_states, initial_state=initial_state)
+        encoder_states, h1, c1, _, _ = self.lstm1(combined_embed, initial_state=[initial_state, initial_state, initial_state, initial_state])
+        encoder_states, h2, c2, _, _ = self.lstm2(encoder_states, initial_state=[initial_state, initial_state, initial_state, initial_state])
         encoder_states, h3, c3, _, _ = self.lstm3(encoder_states, initial_state=[initial_state, initial_state, initial_state, initial_state])
         encoder_states, h4, c4, _, _ = self.lstm4(encoder_states, initial_state=[initial_state, initial_state, initial_state, initial_state])
         
         return encoder_states, h1, c1, h2, c2, h3, c3, h4, c4
     
     def create_initial_state(self):
-        return [tf.zeros((self.batch_size, self.n_units)) for i in range(4)]
+        return tf.zeros((self.batch_size, self.n_units))
 
 
 class DeepDecoder(tf.keras.Model):
@@ -198,19 +190,11 @@ class DeepDecoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs => [input_word, encoder_outputs, context_vec, is_training [h1, c1, h2, c2, h3, c3, h4, c4]]
-        returns => decoder_output, attn_weights, context_vec, h1, c1, h2, c2, h3, c3, h4, c4
+        inputs => [input_word, encoder_outputs, is_training, [h1, c1, h2, c2, h3, c3, h4, c4]]
+        returns => decoder_output, attn_weights, h1, c1, h2, c2, h3, c3, h4, c4
         '''
-        input_word, encoder_outputs, context_vec, is_training, hidden = inputs
+        input_word, encoder_outputs, is_training, hidden = inputs
         h1, c1, h2, c2, h3, c3, h4, c4 = hidden
-        
-        input_embed = self.embedding(input_word)
-        input_embed = tf.concat([tf.expand_dims(context_vec, 1), input_embed], axis=-1)
-        
-        decoder_output, h1, c1 = self.lstm1(input_embed, initial_state=[h1, c1])
-        decoder_output, h2, c2 = self.lstm2(decoder_output, initial_state=[h2, c2])
-        decoder_output, h3, c3 = self.lstm3(decoder_output, initial_state=[h3, c3])
-        decoder_output, h4, c4 = self.lstm4(decoder_output, initial_state=[h4, c4])
         
         # ------ Attention ------ #
         # => (batch_size, 1, n_units)
@@ -224,20 +208,27 @@ class DeepDecoder(tf.keras.Model):
         
         # context vector is a weighted sum of attention weights with encoder outputs
         context_vec = attn_weights * encoder_outputs
-        # => (batch_size, n_units * 2)
+        # => (batch_size, n_units)
         context_vec = tf.reduce_sum(context_vec, axis=1)
         # ------ ------ #
+        
+        input_embed = self.embedding(input_word)
+        
+        # feed context vector as input into LSTM at current timestep
+        input_embed = tf.concat([tf.expand_dims(context_vec, 1), input_embed], axis=-1)
+        
+        decoder_output, h1, c1 = self.lstm1(input_embed, initial_state=[h1, c1])
+        decoder_output, h2, c2 = self.lstm2(decoder_output, initial_state=[h2, c2])
+        decoder_output, h3, c3 = self.lstm3(decoder_output, initial_state=[h3, c3])
+        decoder_output, h4, c4 = self.lstm4(decoder_output, initial_state=[h4, c4])
         
         # (batch_size, 1, n_units) => (batch_size, n_units)
         decoder_output = tf.reshape(decoder_output, (-1, decoder_output.shape[2]))
         
-        # => (batch_size, n_units * 3)
-        decoder_output = tf.concat([decoder_output, context_vec], axis=-1)
-        
-        decoder_output = Dropout(DROPOUT)(decoder_output, training=is_training)
+        decoder_output = self.dropout(decoder_output, training=is_training)
         decoder_output = self.out_dense1(decoder_output)
         
-        return decoder_output, attn_weights, context_vec, h1, c1, h2, c2, h3, c3, h4, c4
+        return decoder_output, attn_weights, h1, c1, h2, c2, h3, c3, h4, c4
     
 def loss_function(label, pred, loss_object):
     '''
@@ -536,7 +527,7 @@ def save_seq2seq(encoder, decoder, deep_lstm):
     tf.saved_model.save(decoder, decoder_fn, signatures=decoder.call.get_concrete_function(
         [
             tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='input_word'), 
-            tf.TensorSpec(shape=[None, None, LSTM_DIM], dtype=tf.float32, name="encoder_output"),
+            tf.TensorSpec(shape=[None, None, LSTM_DIM * 2], dtype=tf.float32, name="encoder_output"),
             tf.TensorSpec(shape=[], dtype=tf.bool, name="is_training"),
             decoder_states_spec
         ]))

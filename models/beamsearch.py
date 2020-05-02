@@ -4,11 +4,40 @@
 """
 import numpy as np
 import tensorflow as tf
+import textpreprocessing as pre
 from math import log
 from copy import copy
+from functools import reduce
 
-def beam_search(persona, msg, prcoess_inputs, beam_length = 3):
-    ''' Generates a reply for a trained sequence to sequence model using beam search '''
+def beam_search(persona, msg, process_inputs, pred_function, max_reply_length, beam_length = 3):
+    '''
+    Beam Searh Framework
+
+    Parameters
+    ----------
+    persona : str
+        input persona
+    msg : str
+        input message
+    process_inputs : function
+        process_inputs(persona, msg) -> tokenized inputs which will be passed
+        to pred_function
+    pred_function : function
+        pred_function(inputs, state, timestep) -> out_layer, new_state
+        out_layer must be a 1D logits tensor with vocab size elements
+        state will be None for the first calls to pred_function
+        timestep is which output word is currently being predicted
+    max_reply_length : int
+        maximum number of tokens in the reply's
+    beam_length : int, optional
+        beam width to use The default is 3.
+
+    Returns
+    -------
+    replys : list of str
+        reply's from most likely to least likely
+
+    '''
     
     '''
     No built in implementation of beam search for keras models so build our own, works by
@@ -28,30 +57,22 @@ def beam_search(persona, msg, prcoess_inputs, beam_length = 3):
     6. pick most likely beam lenght sequences according to length normalized
        log likelihood objective function
     '''
-    input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
-    input_seq = tf.convert_to_tensor(input_seq)
+    inputs = process_inputs(persona, msg)
     
-    segment_input  = np.array([pre.generate_segment_array(input_msg, in_seq_length)])
-    segment_input  = tf.convert_to_tensor(segment_input)
-    
-    encoder_out, *initial_state = encoder_model([input_seq, segment_input])
-    
-    context_vec = tf.zeros((encoder_out.shape[0], encoder_out.shape[-1]))
-    
-    # beams will store [ [probability, states, context_vec, word1, word2, ...], ... ]
-    beams = [ [0.0, initial_state, context_vec, pre.START_SEQ_TOKEN] for i in range(beam_length)]
-    
-    prob = 0
-    initial_state = 1
-    context_vec = 2
+    # beams will store [ [probability, state, word1, word2, ...], ... ]
+    state = None
+    beams = [ [0.0, state, pre.START_SEQ_TOKEN] for i in range(beam_length)]
     
     # store beam length ^ 2 most likely words [ [probability, word_index, beam_index], ... ]
     most_likely_words_all = [[0.0, 0, 0] for i in range(beam_length * beam_length)]
     
-    beam_finished = lambda b : b[-1] == pre.END_SEQ_TOKEN or len(b) - context_vec - 1 >= out_seq_length
+    timestep = 0
+    
+    beam_finished = lambda b : b[-1] == pre.END_SEQ_TOKEN or len(b) - 2 >= max_reply_length
     while not reduce(lambda a, b : a and b , map(beam_finished, beams)):
     
-        # find beam length most likely words out of all beams (vocab_size * beam length possibilities)
+        # find beam length most likely words out of all beams 
+        # (vocab size * beam length) possibilities
         for b_index in range(len(beams)):
             b = beams[b_index]
             prev_word = b[-1]
@@ -61,6 +82,7 @@ def beam_search(persona, msg, prcoess_inputs, beam_length = 3):
                 # and leave most_likely_words for this beam constant
                 continue
             
+            logits, b[1] = pred_function(inputs)
             decoder_input = tf.expand_dims([tokenizer.word_index[prev_word]], 0)
             out_softmax_layer, _, b[context_vec], *b[initial_state] = decoder_model([decoder_input, encoder_out, b[context_vec], b[initial_state]])
             
@@ -117,6 +139,8 @@ def beam_search(persona, msg, prcoess_inputs, beam_length = 3):
             temp_beams[i] = old_beam
             
         beams = temp_beams
+        
+        timestep += 1
     
     # sort beams by length normalized log likelihood descending and only keep text
     replys = [" ".join(b[context_vec + 2:-1]) 
