@@ -720,13 +720,13 @@ class ChatBot(evaluate.BaseBot):
     def eval_f1(self):
         '''
         Get test set F1 score: 2 . (precision * recall) / (precision + recall)
-        where an F1 score is calculated for each reply and summed
+        where an F1 score is calculated for each reply
         Note: this can take some time
 
         Returns
         -------
         float
-            summed F1 score
+            mean F1 score
 
         '''
         get_reply = (lambda persona, msg : 

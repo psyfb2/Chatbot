@@ -9,6 +9,7 @@ import text_preprocessing as pre
 import seq2seq_model as seq2seq
 import autoencoder_model as autoenc
 import multiple_encoders as multenc
+import transformer
 import tensorflow as tf
 from multiple_encoders import ChatBot as me_chatbot
     
@@ -140,13 +141,19 @@ if __name__ == '__main__':
                 pre_train=args.perform_pretraining)
             
         elif args.train == model_choices[3]:
-            multenc.train_multiple_encoders(args.epochs, args.batch_size, args.early_stopping_patience, args.min_epochs ,deep_lstm=False, pre_train=args.perform_pretraining)
+            multenc.train_multiple_encoders(args.epochs, args.batch_size, 
+                                            args.early_stopping_patience, args.min_epochs,
+                                            deep_lstm=False, pre_train=args.perform_pretraining)
         
         elif args.train == model_choices[4]:
-            multenc.train_multiple_encoders(args.epochs, args.batch_size, args.early_stopping_patience, args.min_epochs, deep_lstm=True, pre_train=args.perform_pretraining)
+            multenc.train_multiple_encoders(args.epochs, args.batch_size, 
+                                            args.early_stopping_patience, args.min_epochs, 
+                                            deep_lstm=True, pre_train=args.perform_pretraining)
         
         elif args.train == model_choices[5]:
-            pass
+            transformer.train_transformer(args.epochs, args.batch_size, 
+                                          args.early_stopping_patience, args.min_epochs,
+                                          args.segment_embedding)
     
     if args.eval != None:
         if args.eval == model_choices[0]:
@@ -180,7 +187,7 @@ if __name__ == '__main__':
             chatbot = me_chatbot(deep_model=True)
         
         elif args.eval == model_choices[5]:
-            pass
+            chatbot = transformer.ChatBot()
         
         persona, _ = pre.load_dataset(pre.TRAIN_FN)
         

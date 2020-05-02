@@ -668,24 +668,12 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
         
     return EPOCHS
 
-def data_pipeline(BATCH_SIZE):
+def data_pipeline(filename, tokenizer, in_seq_length, out_seq_length, BATCH_SIZE):
     ''' Load data from file into integer encoded format '''
-    tokenizer, in_seq_length, out_seq_length = create_subword_tokenizer()
-    # +3 for SOS, SEP, EOS tokens
-    vocab_size = tokenizer.vocab_size + 3
-    sample_str = "optimus prime goodness"
-    assert tokenizer.decode(tokenizer.encode(sample_str)) == sample_str
-    
     BUFFER_SIZE = 15000
     
-    print("Input Length: %d " % in_seq_length)
-    print("Output Length: %d" % out_seq_length)
-    print("Vocab Size: %d" % vocab_size)
-    
-    # load training data
-    train_personas, train_data = pre.load_dataset(pre.TRAIN_FN)
-    train_data = train_data[:256]
-    
+    train_personas, train_data = pre.load_dataset(filename)
+
     raw_msg = [msg for msg in train_data[:20, 0]]
     raw_persona = [train_personas[int(p_index)] for p_index in train_data[:20, 2]]
     
@@ -700,21 +688,9 @@ def data_pipeline(BATCH_SIZE):
         (encoder_input, segment_input, decoder_target)).cache().shuffle(BUFFER_SIZE)
     dataset = dataset.batch(BATCH_SIZE)
     
+    num_examples = len(encoder_input)
     
-    # validation data
-    train_personas, train_data = pre.load_dataset(pre.VALID_FN)
-    train_data = train_data[:32]
-    encoder_input, decoder_target = encode_training_examples(train_personas, 
-                                                             train_data, tokenizer, 
-                                                             in_seq_length, out_seq_length)
-    segment_input  = np.array([generate_segment_list(encoded_msg, 
-                               in_seq_length, tokenizer.vocab_size + SEP) for encoded_msg in encoder_input])
-    
-    val_dataset = tf.data.Dataset.from_tensor_slices(
-        (encoder_input, segment_input, decoder_target))
-    val_dataset = val_dataset.batch(BATCH_SIZE)
-    
-    return dataset, val_dataset, tokenizer, in_seq_length, out_seq_length, raw_msg, raw_persona
+    return dataset, num_examples, raw_msg, raw_persona
     
     
 
@@ -724,10 +700,22 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
     global checkpoint_manager
     global optimizer
     
-    pre.VERBOSE = 1
+    tokenizer, in_seq_length, out_seq_length = create_subword_tokenizer()
+    # +3 for SOS, SEP, EOS tokens
+    vocab_size = tokenizer.vocab_size + 3
+    sample_str = "optimus prime goodness"
+    assert tokenizer.decode(tokenizer.encode(sample_str)) == sample_str
     
-    dataset, val_dataset, tokenizer, in_seq_length, out_seq_length, raw_msg, raw_persona = (
-        data_pipeline(BATCH_SIZE))
+    print("Input Length: %d " % in_seq_length)
+    print("Output Length: %d" % out_seq_length)
+    print("Vocab Size: %d" % vocab_size)
+    
+    dataset, _, raw_msg, raw_persona = data_pipeline(pre.TRAIN_FN, tokenizer,
+                                                     in_seq_length, out_seq_length,
+                                                     BATCH_SIZE)
+    val_dataset, _, val_raw_msg, val_raw_persona = data_pipeline(pre.VALID_FN, tokenizer,
+                                                                 in_seq_length, out_seq_length,
+                                                                 BATCH_SIZE)
     
     vocab_size = tokenizer.vocab_size + 3
     
@@ -752,7 +740,8 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
     
     tokenizer.save_to_file(pre.TRANSFORMER_TOKENIZER_FN)
     
-    # do some text generation on train set
+    # do some text generation on train set and validation set
+    print("Predictions from training set:")
     for i in range(len(raw_msg)):
         reply, attn_dict = generate_reply_transformer(raw_persona[i], raw_msg[i],
                                                       tokenizer, transformer,
@@ -761,6 +750,14 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
         print("Message:", raw_msg[i])
         print("Reply:", reply, "\n")
     
+    print("Prediction from validation set:")
+    for i in range(len(val_raw_msg)):
+        reply, attn_dict = generate_reply_transformer(val_raw_persona[i], val_raw_msg[i],
+                                                      tokenizer, transformer,
+                                                      out_seq_length)
+        print("Persona:", val_raw_persona[i])
+        print("Message:", val_raw_msg[i])
+        print("Reply:", reply, "\n")
     
 
 '''
@@ -797,7 +794,7 @@ def generate_reply_transformer(persona, msg, tokenizer, transformer, max_reply_l
         
         inputs = [input_seq, seg_seq, out_seq, False, encoder_mask, look_ahead_mask,
                   decoder_mask]
-        # => (batch_size, out_seq.shape[1] + 1, vocab_size)
+        # => (batch_size, out_seq.shape[1], vocab_size)
         pred, attn_weights = transformer(inputs)
         
         # get the last word predicted by the transformer
@@ -837,7 +834,8 @@ class ChatBot(evaluate.BaseBot):
         
         self.vocab_size = self.tokenizer.vocab_size + 3
         
-        self.last_input = None
+        self.last_persona = None
+        self.last_msg = None
         self.last_attn_dict = None
         self.last_reply = None
             
@@ -845,11 +843,7 @@ class ChatBot(evaluate.BaseBot):
                                       self.vocab_size, self.vocab_size, self.vocab_size, 
                                       True, DROPOUT)
         
-        optimizer = tf.keras.optimizers.Adam(TransformerSchedule(D_MODEL), 
-                                             beta_1=0.9, beta_2=0.98, 
-                                             epsilon=1e-9)
-        
-        ckpt = tf.train.Checkpoint(transformer=transformer, optimizer=optimizer)
+        ckpt = tf.train.Checkpoint(transformer=self.transformer)
         manager = tf.train.CheckpointManager(ckpt, pre.TRANSFORMER_CHECKPOINT_PATH,
                                              max_to_keep=3)
         
@@ -878,6 +872,8 @@ class ChatBot(evaluate.BaseBot):
             reply
 
         '''
+        self.last_persona = persona
+        self.last_msg = message
         self.last_reply, self.last_attn_dict = generate_reply_transformer(persona, msg,
                                                                           self.tokenizer, 
                                                                           self.transformer, 
@@ -893,21 +889,65 @@ class ChatBot(evaluate.BaseBot):
         None.
 
         '''
-        pass
+        fig = plt.figure(figsize=(16, 8))
+  
+        persona = self.tokenizer.encode(self.last_persona)
+        msg = self.tokenizer.encode(self.last_msg)
+        reply = self.tokenizer.encode(self.last_reply)
+        
+        # each layer has 2 sets of NUM_HEADS attention weights 
+        # 1 set for self attention called self_attn{layer_num}
+        # 1 set for encoder-decoder attention called ed_attn{layer_num}
+        # plot last block of encoder-decoder attention
+        block = 'ed_attn0'
+        for i in self.last_attn_dict:
+            if 'ed_attn' in i and int(block[-1]) < int(i[-1]):
+                block = i
+        
+        attention = tf.squeeze(self.last_attn_dict[block], axis=0)
+        
+        for head in range(attention.shape[0]):
+          ax = fig.add_subplot(2, 4, head+1)
+          
+          # plot the attention weights
+          ax.matshow(attention[head][:-1, :], cmap='viridis')
+          
+          fontdict = {'fontsize': 10}
+          
+          ax.set_xticks(range(len(persona) + len(msg) + 3))
+          ax.set_yticks(range(len(reply)))
+          
+          ax.set_ylim(len(reply)-1.5, -0.5)
+          
+          ax.set_xticklabels(
+              ['<start>'] + [self.tokenizer.decode([i]) for i in persona] + ['<sep>'] +
+              [self.tokenizer.decode([i]) for i in msg] + ['<end>'], 
+              fontdict=fontdict, rotation=90)
+          
+          ax.set_yticklabels([self.tokenizer.decode([i]) for i in reply], 
+                             fontdict=fontdict)
+          
+          ax.set_xlabel('Head %d' % (head + 1))
+        
+        plt.tight_layout()
+        plt.show()
     
     def eval_f1(self):
         '''
         Get test set F1 score: 2 . (precision * recall) / (precision + recall)
-        where an F1 score is calculated for each reply and summed
+        where an F1 score is calculated for each reply and the mean is returned
         Note: this can take some time
 
         Returns
         -------
         float
-            summed F1 score
+            mean F1 score
 
         '''
-        pass
+        get_reply = (lambda persona, msg : 
+                     generate_reply_transformer(persona, msg, self.tokenizer,
+                                                self.transformer, self.out_seq_length))
+        return evaluate.f1(get_reply)
             
     
     def eval_ppl(self):
@@ -920,7 +960,26 @@ class ChatBot(evaluate.BaseBot):
            float
                perplexity meassure
         '''
-        pass
+        batch_size = 512
+        dataset, num_examples, _, _ = data_pipeline(pre.TEST_FN, self.tokenizer, 
+                                                    115, self.out_seq_length, 
+                                                    batch_size)
+        ppl = 0
+        for (msg, seg, reply) in dataset:
+            reply_input_batch  = reply[:, :-1]
+            reply_target_batch = reply[:, 1:]
+            
+            encoder_mask, look_ahead_mask, decoder_mask = create_masks(msg, 
+                                                                       reply_input_batch)
+            pred, _ = self.transformer([msg, seg, 
+                                   reply_input_batch, False,
+                                   encoder_mask, look_ahead_mask,
+                                   decoder_mask])
+            ppl += evaluate.CCE_loss(reply_target_batch, pred)
+            
+        ppl = ppl / num_examples
+        return ppl.numpy()
+        
 
 if __name__ == "__main__":
     # do some tests to ensure Encoder and Decoder have correct dimensionality
