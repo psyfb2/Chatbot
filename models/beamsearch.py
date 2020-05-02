@@ -7,7 +7,7 @@ import tensorflow as tf
 from math import log
 from copy import copy
 
-def beam_search_seq2seq(encoder_model, decoder_model, tokenizer, input_msg, in_seq_length, out_seq_length, beam_length = 3):
+def beam_search(persona, msg, prcoess_inputs, beam_length = 3):
     ''' Generates a reply for a trained sequence to sequence model using beam search '''
     
     '''

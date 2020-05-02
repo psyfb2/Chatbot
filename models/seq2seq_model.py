@@ -254,17 +254,18 @@ def loss_function(label, pred, loss_object):
 def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, loss_object):
     total_loss = 0
     
+    enc_state = encoder.create_initial_state()
+    
     for (batch, (encoder_input, segment_input, decoder_target)) in enumerate(val_dataset.take(batches_per_epoch)):
         loss = 0
         
-        enc_state = encoder.create_initial_state()
         encoder_outputs, *initial_state = encoder(
             [encoder_input, segment_input, enc_state])
         
         decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_input.shape[0], 1)
     
         for t in range(1, decoder_target.shape[1]):
-            predictions, _, context_vec, *initial_state = decoder([decoder_input, encoder_outputs, False, initial_state])
+            predictions, _, *initial_state = decoder([decoder_input, encoder_outputs, False, initial_state])
             
             loss += loss_function(decoder_target[:, t], predictions, loss_object)
             
@@ -284,8 +285,9 @@ def train_step(encoder_input, segment_input, decoder_target, encoder, decoder, l
     '''
     loss = 0
     
+    enc_state = encoder.create_initial_state()
+    
     with tf.GradientTape() as tape:
-        enc_state = encoder.create_initial_state()
         encoder_outputs, *initial_state = encoder(
             [encoder_input, segment_input, enc_state])
         
@@ -293,7 +295,7 @@ def train_step(encoder_input, segment_input, decoder_target, encoder, decoder, l
         
         # Teacher forcing, ground truth for previous word input to the decoder at current timestep
         for t in range(1, decoder_target.shape[1]):
-            predictions, _, context_vec, *initial_state = decoder([decoder_input, encoder_outputs, True, initial_state])
+            predictions, _, *initial_state = decoder([decoder_input, encoder_outputs, True, initial_state])
             
             loss += loss_function(decoder_target[:, t], predictions, loss_object)
             
@@ -389,7 +391,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
         movie_epochs = 3
         movie_conversations = pre.load_movie_dataset(pre.MOVIE_FN)
         
-        encoder_input  = movie_conversations[:, 0]
+        encoder_input  = np.array([pre.START_SEQ_TOKEN + ' ' + row[0] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
         decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in movie_conversations])
         
         movie_conversations = None
@@ -423,7 +425,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
         daily_epochs = 3
         conversations = pre.load_dailydialogue_dataset()
         
-        encoder_input  = conversations[:, 0]
+        encoder_input  = np.array([pre.START_SEQ_TOKEN + ' ' + row[0] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
         decoder_target = np.array([pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in conversations])
         
         conversations = None
@@ -483,11 +485,13 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
 def data_pipeline(filename, tokenizer, persona_length, msg_length, reply_length, BATCH_SIZE, drop_remainder=True):
     # ------ Train on PERSONA-CHAT ------ #
     personas, data = pre.load_dataset(filename)
-    data = data[:4] #########################
+
     BUFFER_SIZE = 15000
 
     encoder_input  = np.array(
-        [pre.truncate(personas[int(row[2])], persona_length) + ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] for row in data])
+        [pre.START_SEQ_TOKEN + ' ' + pre.truncate(personas[int(row[2])], persona_length) + 
+         ' ' + pre.SEP_SEQ_TOKEN + ' ' + row[0] + ' ' + pre.END_SEQ_TOKEN for row in data])
+    
     decoder_target = np.array(
         [pre.START_SEQ_TOKEN + ' ' + row[1] + ' ' + pre.END_SEQ_TOKEN for row in data])
         
@@ -525,14 +529,14 @@ def save_seq2seq(encoder, decoder, deep_lstm):
         [
             tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='input_utterence'),
             tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='segment_tokens'),
-            tf.TensorSpec(shape=[None, None], dtype=tf.int32, name="initial_state")
+            tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name="initial_state")
         ]
         ))
     
     tf.saved_model.save(decoder, decoder_fn, signatures=decoder.call.get_concrete_function(
         [
             tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='input_word'), 
-            tf.TensorSpec(shape=[None, None, LSTM_DIM * 2], dtype=tf.float32, name="encoder_output"),
+            tf.TensorSpec(shape=[None, None, LSTM_DIM], dtype=tf.float32, name="encoder_output"),
             tf.TensorSpec(shape=[], dtype=tf.bool, name="is_training"),
             decoder_states_spec
         ]))
@@ -540,8 +544,9 @@ def save_seq2seq(encoder, decoder, deep_lstm):
 def generate_reply_seq2seq(encoder, decoder, tokenizer, input_msg, in_seq_length, out_seq_length):
     '''
     Generates a reply for a trained sequence to sequence model using greedy search 
-    input_msg should be persona + pre.SEP_SEQ + message
-    '''
+    input_msg should be pre.START_SEQ + persona + pre.SEP_SEQ + message + pre.END_SEQ
+    '''    
+    
     input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
     input_seq = tf.convert_to_tensor(input_seq)
     
@@ -551,7 +556,7 @@ def generate_reply_seq2seq(encoder, decoder, tokenizer, input_msg, in_seq_length
     
     attn_weights = np.zeros((out_seq_length, in_seq_length))
     
-    encoder_initial = [tf.zeros((1, LSTM_DIM))]
+    encoder_initial = tf.zeros((1, LSTM_DIM))
     encoder_out, *initial_state = encoder([input_seq, segment_input, encoder_initial])
     
     decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]], 0)
@@ -624,13 +629,14 @@ class ChatBot(evaluate.BaseBot):
             reply
 
         '''
-        self.last_input = persona + ' ' + pre.SEP_SEQ_TOKEN + ' ' + message
+        self.last_input = (pre.START_SEQ_TOKEN + ' ' + persona
+                           + ' ' + pre.SEP_SEQ_TOKEN + ' ' + message
+                           + ' ' + pre.END_SEQ_TOKEN)
         
         reply, self.attn_weights = generate_reply_seq2seq(self.encoder, self.decoder,
                                                           self.tokenizer, self.last_input,
                                                           self.persona_length + self.msg_length,
                                                           self.reply_length)
-                                                            
         self.last_reply = reply
         return self.last_reply
     
@@ -661,7 +667,9 @@ class ChatBot(evaluate.BaseBot):
         '''
         get_reply = (lambda persona, msg : 
                      generate_reply_seq2seq(self.encoder, self.decoder, self.tokenizer,
-                                            persona + ' ' + pre.SEP_SEQ_TOKEN + ' ' + msg,
+                                            (pre.START_SEQ + ' ' + persona + ' ' + 
+                                             pre.SEP_SEQ_TOKEN + ' ' + msg + ' ' + 
+                                             pre.END_SEQ_TOKEN),
                                             self.persona_length + self.msg_length, 
                                             self.reply_length))
         return evaluate.f1(get_reply)
@@ -682,17 +690,19 @@ class ChatBot(evaluate.BaseBot):
                                                  self.persona_length, self.msg_length,
                                                  self.reply_length, batch_size, False)
         ppl = 0
+        
+        enc_state = tf.zeros((1, LSTM_DIM))
+        
         for (encoder_input, segment_input, decoder_target) in dataset:
             encoder_outputs, *initial_state = self.encoder(
-                [encoder_input, segment_input])
+                [encoder_input, segment_input, enc_state])
             
             decoder_input = tf.expand_dims(
                 [self.tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_input.shape[0], 1)
-            context_vec = tf.zeros((encoder_outputs.shape[0], encoder_outputs.shape[-1]))
         
             for t in range(1, decoder_target.shape[1]):
-                predictions, _, context_vec, *initial_state = self.decoder(
-                    [decoder_input, encoder_outputs, context_vec, False, initial_state])
+                predictions, _, *initial_state = self.decoder(
+                    [decoder_input, encoder_outputs, False, initial_state])
                 
                 ppl += evaluate.CCE_loss(decoder_target[:, t], predictions)
                 
