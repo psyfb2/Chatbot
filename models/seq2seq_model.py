@@ -662,7 +662,7 @@ class ChatBot(evaluate.BaseBot):
                                              pre.SEP_SEQ_TOKEN + ' ' + msg + ' ' + 
                                              pre.END_SEQ_TOKEN),
                                             self.persona_length + self.msg_length, 
-                                            self.reply_length))
+                                            self.reply_length)[0])
         return evaluate.f1(get_reply)
             
     
