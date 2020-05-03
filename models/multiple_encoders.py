@@ -526,7 +526,6 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     dataset, num_examples, persona_raw, msg_raw = data_pipeline(
         pre.TRAIN_FN, tokenizer, persona_length, msg_length, reply_length, BATCH_SIZE)
     
-    
     val_dataset, num_examples_val, persona_raw_val, msg_raw_val = data_pipeline(
         pre.VALID_FN, tokenizer, persona_length, msg_length, reply_length, BATCH_SIZE)
     

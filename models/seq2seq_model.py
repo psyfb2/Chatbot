@@ -451,7 +451,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
                                                msg_length, reply_length, BATCH_SIZE)
     
     # load validation set
-    val_dataset, num_examples_val, val_raw = data_pipeline(pre.TRAIN_FN, tokenizer, persona_length,
+    val_dataset, num_examples_val, val_raw = data_pipeline(pre.VALID_FN, tokenizer, persona_length,
                                                msg_length, reply_length, BATCH_SIZE)
     
     batches_per_epoch = num_examples // BATCH_SIZE
