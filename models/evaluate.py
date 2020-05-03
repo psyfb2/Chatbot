@@ -42,7 +42,7 @@ def sentence_f1(reply, pred):
     reply = reply.split(' ')
     pred = pred.split(' ')
     
-    matched_words = len([w for w in pred if w in reply])
+    matched_words = len([w for w in set(pred) if w in reply])
     
     if matched_words == 0:
         return 0
@@ -64,6 +64,10 @@ class BaseBot(metaclass=ABCMeta):
     
     @abstractmethod
     def plot_attn(self):
+        pass
+    
+    @abstractmethod
+    def beam_search_reply(self, persona, message, beam_width):
         pass
     
     @abstractmethod

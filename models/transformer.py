@@ -10,6 +10,7 @@ import text_preprocessing as pre
 import tensorflow_datasets as tfds
 from tensorflow.keras.layers import Dense, LayerNormalization, Dropout, Embedding
 from time import time
+from beamsearch import beam_search
 
 # tokens
 SOS = 0
@@ -43,7 +44,7 @@ train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy
 val_loss = tf.keras.metrics.Mean(name='val_loss')
 transformer = None
 checkpoint = None
-checkpoint_manage = None
+checkpoint_manager = None
 optimizer = None
 
 
@@ -328,6 +329,7 @@ class Transformer(tf.keras.Model):
         
         self.output_layer = Dense(vocab_size)
     
+    @tf.function
     def call(self, inputs):
         ''' 
         One Transformer Forward Pass
@@ -877,7 +879,8 @@ class ChatBot(evaluate.BaseBot):
         '''
         self.last_persona = persona
         self.last_msg = message
-        self.last_reply, self.last_attn_dict = generate_reply_transformer(persona, msg,
+        # start, sep, end tokens added in the generate function
+        self.last_reply, self.last_attn_dict = generate_reply_transformer(persona, message,
                                                                           self.tokenizer, 
                                                                           self.transformer, 
                                                                           self.out_seq_length)
@@ -934,6 +937,80 @@ class ChatBot(evaluate.BaseBot):
         
         plt.tight_layout()
         plt.show()
+        
+    def beam_search_reply(self, persona, message, beam_width):
+        '''
+        Beam Search
+
+        Parameters
+        ----------
+        persona : str
+            persona description
+        message : str
+            message
+        beam_width : int
+            beam_width to use 
+
+        Returns
+        -------
+        list of str
+            beam_width replies from most likely to least likely
+
+        '''
+        def process_inputs(persona, msg):
+            input_seq = encode_sentence(persona, msg, self.tokenizer, None)
+            seg_seq = generate_segment_list(input_seq, len(input_seq), 
+                                            self.tokenizer.vocab_size + SEP, 
+                                            False)
+            
+            input_seq = tf.expand_dims(input_seq, 0)
+            seg_seq   = tf.expand_dims(seg_seq, 0)
+            out_seq   = tf.expand_dims([self.tokenizer.vocab_size + SOS], 0)
+            
+            return [input_seq, seg_seq, out_seq]
+        
+        def pred_function(inputs, state, last_word):
+            # decoder step            
+            if state is None:
+                # first call to pred function
+                input_seq, seg_seq, out_seq = inputs
+            else:
+                input_seq, seg_seq, out_seq = state
+                # add last word to out_seq
+                last_word = tf.convert_to_tensor([last_word], dtype=tf.int32)
+                last_word = tf.expand_dims(last_word, 0)
+                out_seq = tf.concat([out_seq, last_word], axis=-1)
+                
+            encoder_mask, look_ahead_mask, decoder_mask = create_masks(
+            input_seq, out_seq)
+        
+            # => (batch_size, out_seq.shape[1], vocab_size)
+            pred, _ = transformer([input_seq, seg_seq, out_seq, 
+                                              False, encoder_mask, look_ahead_mask,
+                                              decoder_mask])
+            
+            # get the last word predicted by the transformer
+            pred = pred[:, -1: , :]
+            logits = tf.squeeze(pred)            
+            
+            # return output and new state 
+            return logits, [input_seq, seg_seq, out_seq]
+        
+        sos = self.tokenizer.encode(pre.START_SEQ_TOKEN)
+        eos = self.tokenizer.encode(pre.END_SEQ_TOKEN)
+        
+        replys = beam_search(persona, message, process_inputs, pred_function, 
+                             self.reply_length, sos, eos, beam_width)
+        
+        replys_str = []
+        for reply in replys:
+            single_reply_str = []
+            for i in reply:
+                word = pre.index_to_word(i, self.tokenizer)
+                single_reply_str.append(word)
+            replys_str.append(" ".join(single_reply_str))
+        
+        return replys_str
     
     def eval_f1(self):
         '''

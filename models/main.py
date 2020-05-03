@@ -86,8 +86,8 @@ if __name__ == '__main__':
     parser.add_argument("--epochs", default=100, type=int,
                         help="epochs for training on PERSONA-CHAT dataset")
     
-    parser.add_argument("--early_stopping_patience", default=5, type=int,
-                        help="number of consecutive epochs without improvement over validation loss minimum until training is stopped early, default = 5")
+    parser.add_argument("--early_stopping_patience", default=7, type=int,
+                        help="number of consecutive epochs without improvement over validation loss minimum until training is stopped early")
     
     parser.add_argument("--segment_embedding", default=True, type=str2bool,
                         help="Whether or not to add an additional segment embedding to seq2seq models so that it can better distiguish persona from message.")
@@ -121,7 +121,7 @@ if __name__ == '__main__':
                         help="Use beam search")
     
     parser.add_argument("--plot_attention", default=False, type=str2bool,
-                        help="Plot attention weights")
+                        help="Plot attention weights for greedy search")
     # ----------- ----------- #
     
     args = parser.parse_args()
@@ -205,5 +205,17 @@ if __name__ == '__main__':
                 break
             
             msg = pre.clean_line(msg)
-            reply = chatbot.reply(persona, msg)
+            
+            if not args.beam_search:
+                reply = chatbot.reply(persona, msg)
+            else:
+                reply = chatbot.reply(persona, msg)
+                #reply = chatbot.beam_search_reply(persona, msg, args.beam_width)
+                #reply = reply[0]
+            
             print(reply, "\n")
+            
+            if args.plot_attention and not args.beam_search:
+                # keeping track of attention weights for beams is costly
+                # so only do this for greedy search
+                chatbot.plot_attn()

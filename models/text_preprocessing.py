@@ -24,20 +24,14 @@ VOCAB_FN            = os.path.join(PROJ_PATH, 'data', 'vocab.txt')
 GLOVE_FN            = os.path.join(PROJ_PATH, 'data', 'glove.6B.300d.txt')
 PERSONAS_FN         = os.path.join(PROJ_PATH, 'data', 'all_personas.txt')
 
-MULTIENC_ENCODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_encoders_model')
-MULTIENC_DECODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_decoder_model')
+MULTIENC_CHECKPOINT_FN      = os.path.join(PROJ_PATH, 'saved_models', 'multiple_encoders_checkpoints')
+MULTIENC_DEEP_CHECKPOINT_FN = os.path.join(PROJ_PATH, 'saved_models', 'multiple_encoders_deep_checkpoints')
 
-MULTIENC_ENCODER_DEEP_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_encoders_deep_model')
-MULTIENC_DECODER_DEP_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_decoder_deep_model')
-
-SEQ2SEQ_ENCODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_encoder_model')
-SEQ2SEQ_DECODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_decoder_model')
-
-SEQ2SEQ_ENCODER_DEEP_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_encoder_deep_model')
-SEQ2SEQ_DECODER_DEEP_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_decoder_deep_model')
+SEQ2SEQ_CHECKPOINT_FN       = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_checkpoints')
+SEQ2SEQ_DEEP_CHECKPOINT_FN  = os.path.join(PROJ_PATH, 'saved_models', 'seq2seq_deep_checkpoints')
 
 TRANSFORMER_CHECKPOINT_PATH = os.path.join(PROJ_PATH, 'saved_models', 'transformer_checkpoints')
-TRANSFORMER_TOKENIZER_FN = os.path.join(PROJ_PATH, 'saved_models', 'transformer_subword_tokenizer')
+TRANSFORMER_TOKENIZER_FN    = os.path.join(PROJ_PATH, 'saved_models', 'transformer_subword_tokenizer')
 
 AUTOENC_MODEL_IMAGE_FN      = os.path.join(PROJ_PATH, 'saved_models', 'autoenc.png')
 AUTOENC_MODEL_FN            = os.path.join(PROJ_PATH, 'saved_models', 'autoenc.h5')

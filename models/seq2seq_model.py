@@ -10,9 +10,24 @@ from time import time
 from tensorflow.keras.losses import SparseCategoricalCrossentropy
 from tensorflow.keras.layers import LSTM, Dense, Embedding, Bidirectional, Dropout
 from tensorflow.keras.optimizers import Adam
+from beamsearch import beam_search
 
+# hyperparameters
 LSTM_DIM = 512
 DROPOUT = 0.0
+
+# global variables
+loss_object = SparseCategoricalCrossentropy(from_logits=True,
+                                            reduction='none')
+optimizer = Adam()
+
+encoder = None
+decoder = None
+tokenizer = None
+checkpoint = None
+checkpoint_manager = None
+batches_per_epoch = None
+batches_per_epoch_val = None
 
 class Encoder(tf.keras.Model):
     ''' 1 Layer Bidirectional LSTM '''
@@ -244,7 +259,7 @@ def loss_function(label, pred, loss_object):
     
     return tf.reduce_mean(loss_)
 
-def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, loss_object):
+def calc_val_loss(batches_per_epoch, val_dataset):
     total_loss = 0
     
     enc_state = encoder.create_initial_state()
@@ -269,7 +284,8 @@ def calc_val_loss(batches_per_epoch, encoder, decoder, tokenizer, val_dataset, l
     
     return total_loss
 
-def train_step(encoder_input, segment_input, decoder_target, encoder, decoder, loss_object, tokenizer, optimizer, BATCH_SIZE):
+@tf.function
+def train_step(encoder_input, segment_input, decoder_target, BATCH_SIZE):
     '''
     Perform training on a single batch
     encoder_input shape  => (batch_size, in_seq_length)
@@ -306,7 +322,7 @@ def train_step(encoder_input, segment_input, decoder_target, encoder, decoder, l
     return batch_loss
         
 
-def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encoder, decoder, tokenizer, loss_object, optimizer, save_best_model, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE):
+def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE, BATCH_SIZE):
     ''' Train seq2seq model, uses early stopping on the validation set '''
     min_val_loss = float("inf")
     no_improvement_counter = 0
@@ -318,7 +334,7 @@ def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encode
         
         for (batch, (encoder_input, segment_input, decoder_target)) in enumerate(dataset.take(batches_per_epoch)):
             
-            batch_loss = train_step(encoder_input, segment_input, decoder_target, encoder, decoder, loss_object, tokenizer, optimizer, BATCH_SIZE)
+            batch_loss = train_step(encoder_input, segment_input, decoder_target, BATCH_SIZE)
             total_loss += batch_loss
             
             if pre.VERBOSE == 1:
@@ -326,12 +342,12 @@ def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encode
         
         
         if val_dataset != None:
-            val_loss = calc_val_loss(batches_per_epoch_val, encoder, decoder, tokenizer, val_dataset, loss_object)
+            val_loss = calc_val_loss(batches_per_epoch_val, val_dataset)
         
             if val_loss < min_val_loss:
-                if save_best_model:
-                    print("Saving model as best val loss decreased from %f to %f" % (min_val_loss, val_loss))
-                    save_seq2seq(encoder, decoder, deep_lstm)
+                save_path = checkpoint_manager.save()
+                print("Saving model as best val loss decreased from %f to %f" % (min_val_loss, val_loss))
+                print("seq2seq checkpoint saved: %s" % save_path)
                 no_improvement_counter = 0
                 min_val_loss = val_loss
             else:
@@ -342,8 +358,9 @@ def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encode
             print("Epoch %d --- %d sec: Loss %f" % (epoch + 1, time() - start, total_loss / batches_per_epoch))
             
         if epoch + 1 == MIN_EPOCHS:
+            save_path = checkpoint_manager.save()
             print("Saving model as min epochs %d reached" % MIN_EPOCHS)
-            save_seq2seq(encoder, decoder, deep_lstm)
+            print("seq2seq checkpoint saved: %s" % save_path)
         
         if no_improvement_counter >= PATIENCE and epoch > MIN_EPOCHS:
             print("Early stopping, no improvement over minimum in %d epochs" % PATIENCE)
@@ -353,6 +370,14 @@ def train(dataset, val_dataset, batches_per_epoch, batches_per_epoch_val, encode
             
 
 def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use_segment_embedding=True, pre_train=True):
+    global checkpoint
+    global checkpoint_manager
+    global encoder
+    global decoder
+    global tokenizer
+    global batches_per_epoch
+    global batches_per_epoch_val
+    
     vocab, persona_length, msg_length, reply_length = pre.get_vocab()
     tokenizer = pre.fit_tokenizer(vocab)
     vocab_size = len(tokenizer.word_index) + 1
@@ -370,16 +395,22 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
     embedding_matrix = Embedding(vocab_size, embedding_matrix.shape[1], 
                                  weights=[embedding_matrix], trainable=True, 
                                  mask_zero=True, name="tied_embedding")
-
     if deep_lstm:
         encoder = DeepEncoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE, use_segment_embedding, e_dim)
         decoder = DeepDecoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
+        fn = pre.SEQ2SEQ_DEEP_CHECKPOINT_FN
     else:
         encoder = Encoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE, use_segment_embedding, e_dim)
         decoder = Decoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE)
+        fn = pre.SEQ2SEQ_CHECKPOINT_FN
     
-    optimizer = Adam()
-    loss_func = SparseCategoricalCrossentropy(from_logits=True, reduction='none')
+    checkpoint = tf.train.Checkpoint(encoder=encoder,
+                                     decoder=decoder,
+                                     optimizer=optimizer)
+    
+    checkpoint_manager = tf.train.CheckpointManager(checkpoint,
+                                                    fn,
+                                                    max_to_keep=1)
 
     if pre_train:
         # ------ Pretrain on Movie dataset ------ #
@@ -404,7 +435,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
         
         encoder_input, segment_input, decoder_target = None, None, None
     
-        movie_epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, movie_epochs, 0, PATIENCE)
+        movie_epochs = train(dataset, None, movie_epochs, 0, movie_epochs, BATCH_SIZE)
         
         print("Finished Pre-training on Cornell Movie Dataset for %d epochs" % movie_epochs)
         
@@ -438,7 +469,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
         
         encoder_input, segment_input, decoder_target = None, None, None
         
-        daily_epochs = train(dataset, None, batches_per_epoch, None, encoder, decoder, tokenizer, loss_func, optimizer, False, deep_lstm, BATCH_SIZE, daily_epochs, 0, PATIENCE)
+        daily_epochs = train(dataset, None, daily_epochs, 0, daily_epochs, BATCH_SIZE)
         
         print("Finished Pre-training on Daily Dialogue for %d epochs" % daily_epochs)
         
@@ -458,9 +489,9 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
                                                msg_length, reply_length, BATCH_SIZE)
     
     batches_per_epoch = num_examples // BATCH_SIZE
-    val_batches_per_epoch = num_examples_val // BATCH_SIZE
+    batches_per_epoch_val = num_examples_val // BATCH_SIZE
     
-    epochs = train(dataset, val_dataset, batches_per_epoch, val_batches_per_epoch, encoder, decoder, tokenizer, loss_func, optimizer, True, deep_lstm, BATCH_SIZE, EPOCHS, MIN_EPOCHS, PATIENCE)
+    epochs = train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE, BATCH_SIZE)
     
     print("Finished Training on PERSONA-CHAT for %d epochs" % epochs)
     
@@ -501,44 +532,11 @@ def data_pipeline(filename, tokenizer, persona_length, msg_length, reply_length,
     num_examples = len(encoder_input)
     
     return dataset, num_examples, raw
-
-
-def save_seq2seq(encoder, decoder, deep_lstm):
-    ''' Save the encoder and decoder as tensorflow models to file '''
-    if deep_lstm:
-        encoder_fn = pre.SEQ2SEQ_ENCODER_DEEP_MODEL_FN
-        decoder_fn = pre.SEQ2SEQ_DECODER_DEEP_MODEL_FN
-        decoder_states_spec = []
-        for i in range(1, 5):
-            decoder_states_spec.append(tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='h%d' % i))
-            decoder_states_spec.append(tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='c%d' % i))
-    else:
-        encoder_fn = pre.SEQ2SEQ_ENCODER_MODEL_FN
-        decoder_fn = pre.SEQ2SEQ_DECODER_MODEL_FN
-        decoder_states_spec = [
-            tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='h1'), 
-            tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name='c1')]
-        
-    tf.saved_model.save(encoder, encoder_fn , signatures=encoder.call.get_concrete_function(
-        [
-            tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='input_utterence'),
-            tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='segment_tokens'),
-            tf.TensorSpec(shape=[None, LSTM_DIM], dtype=tf.float32, name="initial_state")
-        ]
-        ))
-    
-    tf.saved_model.save(decoder, decoder_fn, signatures=decoder.call.get_concrete_function(
-        [
-            tf.TensorSpec(shape=[None, None], dtype=tf.int32, name='input_word'), 
-            tf.TensorSpec(shape=[None, None, LSTM_DIM * 2], dtype=tf.float32, name="encoder_output"),
-            tf.TensorSpec(shape=[], dtype=tf.bool, name="is_training"),
-            decoder_states_spec
-        ]))
     
 def generate_reply_seq2seq(encoder, decoder, tokenizer, input_msg, in_seq_length, out_seq_length):
     '''
     Generates a reply for a trained sequence to sequence model using greedy search 
-    input_msg should be pre.START_SEQ + persona + pre.SEP_SEQ + message + pre.END_SEQ
+    input_msg should be pre.START_SEQ_TOKEN + persona + pre.SEP_SEQ_TOKEN + message + pre.END_SEQ_TOKEN
     '''    
     
     input_seq = pre.encode_sequences(tokenizer, in_seq_length, [input_msg])
@@ -593,12 +591,30 @@ class ChatBot(evaluate.BaseBot):
         '''
         vocab, self.persona_length, self.msg_length, self.reply_length = pre.get_vocab()
         self.tokenizer = pre.fit_tokenizer(vocab)
+        vocab_size = len(self.tokenizer.word_index) + 1
+        
+        # no need to load 300d glove embedding
+        embedding_matrix = Embedding(vocab_size, 300, trainable=True, 
+                                     mask_zero=True, name="tied_embedding")
+        
         if deep_model:
-            self.encoder = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_DEEP_MODEL_FN)
-            self.decoder = tf.saved_model.load(pre.SEQ2SEQ_DECODER_DEEP_MODEL_FN)
+            self.encoder = DeepEncoder(vocab_size, embedding_matrix, LSTM_DIM, 64, True, 300)
+            self.decoder = DeepDecoder(vocab_size, embedding_matrix, LSTM_DIM, 64)
+            fn = pre.SEQ2SEQ_DEEP_CHECKPOINT_FN
         else:
-            self.encoder = tf.saved_model.load(pre.SEQ2SEQ_ENCODER_MODEL_FN)
-            self.decoder = tf.saved_model.load(pre.SEQ2SEQ_DECODER_MODEL_FN)
+            self.encoder = Encoder(vocab_size, embedding_matrix, LSTM_DIM, 64, True, 300)
+            self.decoder = Decoder(vocab_size, embedding_matrix, LSTM_DIM, 64)
+            fn = pre.SEQ2SEQ_CHECKPOINT_FN
+        
+        ckpt = tf.train.Checkpoint(encoder=self.encoder, decoder=self.decoder)
+        manager = tf.train.CheckpointManager(ckpt, fn,
+                                             max_to_keep=1)
+        
+        ckpt.restore(manager.latest_checkpoint).expect_partial()
+        if manager.latest_checkpoint:
+            pass
+        else:
+            raise FileNotFoundError("Failed load seq2seq checkpoint")
         
         # for plotting attention
         self.attn_weights = None
@@ -634,10 +650,80 @@ class ChatBot(evaluate.BaseBot):
         self.last_reply = reply
         return self.last_reply
     
+    def beam_search_reply(self, persona, message, beam_width):
+        '''
+        Beam Search
+
+        Parameters
+        ----------
+        persona : str
+            persona description
+        message : str
+            message
+        beam_width : int
+            beam_width to use 
+
+        Returns
+        -------
+        list of str
+            beam_width replies from most likely to least likely
+
+        '''
+        def process_inputs(persona, msg):
+            in_seq_length = self.persona_length + self.msg_length
+            
+            input_msg = (pre.START_SEQ_TOKEN + ' ' + persona + ' ' + 
+                         pre.SEP_SEQ_TOKEN + ' ' + msg + ' ' + pre.END_SEQ_TOKEN)
+            
+            input_seq = pre.encode_sequences(self.tokenizer, in_seq_length, [input_msg])
+            input_seq = tf.convert_to_tensor(input_seq)
+            
+            # generate the segment for the input_msg by using seperator token 
+            segment_input  = np.array([pre.generate_segment_array(input_msg, in_seq_length)])
+            segment_input  = tf.convert_to_tensor(segment_input)
+            
+            encoder_initial = tf.zeros((1, LSTM_DIM))
+            encoder_out, *initial_state = self.encoder([input_seq, segment_input, encoder_initial])
+            
+            return [encoder_out, initial_state]
+        
+        def pred_function(inputs, state, last_word):
+            # decoder step
+            decoder_input = tf.expand_dims([last_word], 0)
+            
+            if state is None:
+                # first call to pred function
+                encoder_out, initial_state = inputs
+            else:
+                encoder_out, initial_state = state
+                
+            logits, _, *initial_state = self.decoder(
+                [decoder_input, encoder_out, False, initial_state])
+            
+            # return output and new state 
+            return logits[0], [encoder_out, initial_state]
+        
+        sos = self.tokenizer.word_index[pre.START_SEQ_TOKEN]
+        eos = self.tokenizer.word_index[pre.END_SEQ_TOKEN]
+        
+        replys = beam_search(persona, message, process_inputs, pred_function, 
+                             self.reply_length, sos, eos, beam_width)
+        
+        replys_str = []
+        for reply in replys:
+            single_reply_str = []
+            for i in reply:
+                word = pre.index_to_word(i, self.tokenizer)
+                single_reply_str.append(word)
+            replys_str.append(" ".join(single_reply_str))
+        
+        return replys_str
+            
+        
     def plot_attn(self):
         '''
         Plot attention for the last generated reply
-
+        with reply function (not beam search)
         Returns
         -------
         None.
