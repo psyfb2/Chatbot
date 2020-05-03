@@ -250,7 +250,7 @@ class Encoder(tf.keras.layers.Layer):
         x = self.embedding(x)
         # multiply embedding by sqrt of dimension https://arxiv.org/pdf/1608.05859.pdf
         x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
-        x = tf.add(x, self.pos_encoding[:, in_seq_length, :])
+        x = tf.add(x, self.pos_encoding[:, :in_seq_length, :])
         x = tf.add(x, self.segment_embedding(segment))
         
         x = self.dropout(x, training=is_training)
@@ -354,7 +354,7 @@ class Transformer(tf.keras.Model):
 
 class TransformerSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     ''' Learning rate scheduler for Adam https://arxiv.org/pdf/1706.03762.pdf '''
-    def __init__(self, d_model, warmup_steps=4000):
+    def __init__(self, d_model, warmup_steps=14000):
         super(TransformerSchedule, self).__init__()
         self.d_model = tf.cast(d_model, dtype=tf.float32)
         self.warmup_steps = warmup_steps
@@ -574,10 +574,7 @@ def generate_segment_list(encoded, pad_length, sep_index, no_persona=False):
             
     return segment
 
-@tf.function(input_signature=[
-    tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-    tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+@tf.function
 def val_step(msg_batch, seg_batch, reply_batch):
     reply_input_batch  = reply_batch[:, :-1]
     reply_target_batch = reply_batch[:, 1:]
@@ -592,10 +589,7 @@ def val_step(msg_batch, seg_batch, reply_batch):
         
     val_loss(loss)
 
-@tf.function(input_signature=[
-    tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-    tf.TensorSpec(shape=(None, None), dtype=tf.int32),
-    tf.TensorSpec(shape=(None, None), dtype=tf.int32)])
+@tf.function
 def train_step(msg_batch, seg_batch, reply_batch):
     # use teacher forcing by passing Transformer the ground truth
     # as as the reply input

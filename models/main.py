@@ -175,10 +175,10 @@ if __name__ == '__main__':
             pass
         
         elif args.talk == model_choices[1]:
-            pass
+            chatbot = seq2seq.ChatBot(deep_model=False)
             
         elif args.talk == model_choices[2]:
-            pass
+            chatbot = seq2seq.ChatBot(deep_model=True)
     
         elif args.talk == model_choices[3]:
             chatbot = me_chatbot(deep_model=False)
