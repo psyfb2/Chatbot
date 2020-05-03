@@ -184,6 +184,8 @@ class DeepDecoder(tf.keras.Model):
         self.W2 = Dense(n_units)
         self.V  = Dense(1)
         
+        self.dropout = Dropout(DROPOUT)
+        
         # from_logits=True in loss function, it will apply the softmax there for us
         self.out_dense1 = Dense(vocab_size)
     
@@ -365,7 +367,9 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
     # load GloVe embeddings, make the embeddings for encoder and decoder tied https://www.aclweb.org/anthology/E17-2025.pdf
     embedding_matrix = pre.load_glove_embedding(tokenizer, pre.GLOVE_FN)
     e_dim = embedding_matrix.shape[1]
-    embedding_matrix = Embedding(vocab_size, embedding_matrix.shape[1], weights=[embedding_matrix], trainable=True, mask_zero=True, name="tied_embedding")
+    embedding_matrix = Embedding(vocab_size, embedding_matrix.shape[1], 
+                                 weights=[embedding_matrix], trainable=True, 
+                                 mask_zero=True, name="tied_embedding")
 
     if deep_lstm:
         encoder = DeepEncoder(vocab_size, embedding_matrix, LSTM_DIM, BATCH_SIZE, use_segment_embedding, e_dim)
@@ -444,7 +448,6 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
             print("Message:", raw[i])
             print("Reply:", reply + "\n")
         # ------ ------ #
-    
 
     # ------ Train on PERSONA-CHAT ------ #
     dataset, num_examples, raw = data_pipeline(pre.TRAIN_FN, tokenizer, persona_length,
@@ -658,7 +661,7 @@ class ChatBot(evaluate.BaseBot):
         '''
         get_reply = (lambda persona, msg : 
                      generate_reply_seq2seq(self.encoder, self.decoder, self.tokenizer,
-                                            (pre.START_SEQ + ' ' + persona + ' ' + 
+                                            (pre.START_SEQ_TOKEN + ' ' + persona + ' ' + 
                                              pre.SEP_SEQ_TOKEN + ' ' + msg + ' ' + 
                                              pre.END_SEQ_TOKEN),
                                             self.persona_length + self.msg_length, 

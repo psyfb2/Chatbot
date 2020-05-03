@@ -22,6 +22,7 @@ MOVIE_FN            = os.path.join(PROJ_PATH, 'data', 'movie_lines.txt')
 DAILYDIALOGUE_FN    = os.path.join(PROJ_PATH, 'data', 'dialogues_text.txt')
 VOCAB_FN            = os.path.join(PROJ_PATH, 'data', 'vocab.txt')
 GLOVE_FN            = os.path.join(PROJ_PATH, 'data', 'glove.6B.300d.txt')
+PERSONAS_FN         = os.path.join(PROJ_PATH, 'data', 'all_personas.txt')
 
 MULTIENC_ENCODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_encoders_model')
 MULTIENC_DECODER_MODEL_FN    = os.path.join(PROJ_PATH, 'saved_models', 'multiple_decoder_model')
@@ -485,6 +486,26 @@ def clean_line(line):
     line = re.sub('\s{2,}', ' ', line)
     
     return line.strip()
+
+def get_only_personas():
+    if not os.path.exists(PERSONAS_FN):
+        # build file which contains only personas 
+        personas, _ = load_dataset(TRAIN_FN)
+        personas = set(personas)
+        
+        with open(PERSONAS_FN, 'wt') as f:
+            for p in personas:
+                f.write(p + '\n')
+    
+    personas = []
+    with open(PERSONAS_FN, 'rt') as lines:
+        for line in lines:
+            line = line.strip()
+            personas.append(line)
+    
+    return personas
+        
+    
     
 ''' Remove the first number from a string '''
 def remove_first_num(strr):
@@ -527,6 +548,7 @@ if __name__ == '__main__':
     #personas, triples = load_dataset(TRAIN_FN, verbose=1)
     #conversations = load_movie_dataset(MOVIE_FN, verbose=1)
     #dialogue_conversations = load_dailydialogue_dataset(DAILYDIALOGUE_FN, verbose=1)
-    vocab, persona_length, message_length, reply_length = get_vocab(True, verbose=1)
+    #vocab, persona_length, message_length, reply_length = get_vocab(True, verbose=1)
+    print(get_only_personas())
     
     
