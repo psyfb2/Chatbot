@@ -21,20 +21,21 @@ PSN = 1
 MSG = 2
 
 # hyperparameters
+'''
 D_MODEL = 512
 NUM_LAYERS = 6
 NUM_HEADS = 8
 D_FF = 2048
 DROPOUT = 0.1
-
 '''
-BIG Hyperparameters
+
+#BIG Hyperparameters
 D_MODEL = 1024
 NUM_LAYERS = 6
 NUM_HEADS = 16
 D_FF = 2048
 DROPOUT = 0.3
-'''
+
 
 # globals
 loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True,
@@ -739,7 +740,7 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
     
     checkpoint_manager = tf.train.CheckpointManager(checkpoint,
                                                     pre.TRANSFORMER_CHECKPOINT_PATH,
-                                                    max_to_keep=3)
+                                                    max_to_keep=2)
     
     train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE)
     
@@ -850,7 +851,7 @@ class ChatBot(evaluate.BaseBot):
         
         ckpt = tf.train.Checkpoint(transformer=self.transformer)
         manager = tf.train.CheckpointManager(ckpt, pre.TRANSFORMER_CHECKPOINT_PATH,
-                                             max_to_keep=3)
+                                             max_to_keep=2)
         
         ckpt.restore(manager.latest_checkpoint).expect_partial()
         if manager.latest_checkpoint:
