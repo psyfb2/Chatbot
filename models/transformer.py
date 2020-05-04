@@ -25,7 +25,7 @@ D_MODEL = 512
 NUM_LAYERS = 6
 NUM_HEADS = 8
 D_FF = 2048
-DROPOUT = 0.1
+DROPOUT = 0.3
 
 
 #BIG Hyperparameters
@@ -34,7 +34,7 @@ D_MODEL = 1024
 NUM_LAYERS = 6
 NUM_HEADS = 16
 D_FF = 2048
-DROPOUT = 0.3
+DROPOUT = 0.4
 '''
 
 # globals
@@ -321,17 +321,17 @@ class Transformer(tf.keras.Model):
                  use_segment_embedding, dropout=0.1):
         super(Transformer, self).__init__()
         
-        tied_embedding = Embedding(vocab_size, d_model)
+        encoder_embedding = Embedding(vocab_size, d_model)
+        decoder_embedding = Embedding(vocab_size, d_model)
         
         self.encoder = Encoder(num_layers, d_model, num_heads, d_ff, 
-                               tied_embedding, input_max_pos, use_segment_embedding,
+                               encoder_embedding, input_max_pos, use_segment_embedding,
                                dropout)
         self.decoder = Decoder(num_layers, d_model, num_heads, d_ff, 
-                               tied_embedding, output_max_pos, dropout)
+                               decoder_embedding, output_max_pos, dropout)
         
         self.output_layer = Dense(vocab_size)
     
-    @tf.function
     def call(self, inputs):
         ''' 
         One Transformer Forward Pass
@@ -665,11 +665,13 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
                 no_improvement_counter += 1            
         
         if val_dataset != None:
-            print("Epoch %d --- %d sec: Loss %f, Accuracy %f, Val Loss %f" % (epoch + 1, 
-                                                                 time() - elapsed,
-                                                                 train_loss.result(),
-                                                                 train_accuracy.result(),
-                                                                 val_loss_result))
+            print("Epoch %d --- %d sec: Loss %f, Accuracy %f, Val Loss %f, Val Accuracy %f" 
+                  % (epoch + 1, 
+                    time() - elapsed,
+                    train_loss.result(),
+                    train_accuracy.result(),
+                    val_loss_result,
+                    val_accuracy_result))
         else:
             print("Epoch %d --- %d sec: Loss %f, Accuracy %f" % (epoch + 1, 
                                                                  time() - elapsed,
