@@ -357,7 +357,7 @@ class Transformer(tf.keras.Model):
 
 class TransformerSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     ''' Learning rate scheduler for Adam https://arxiv.org/pdf/1706.03762.pdf '''
-    def __init__(self, d_model, warmup_steps=14000):
+    def __init__(self, d_model, warmup_steps=4000):
         super(TransformerSchedule, self).__init__()
         self.d_model = tf.cast(d_model, dtype=tf.float32)
         self.warmup_steps = warmup_steps

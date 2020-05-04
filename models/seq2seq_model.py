@@ -14,7 +14,7 @@ from beamsearch import beam_search
 
 # hyperparameters
 LSTM_DIM = 512
-DROPOUT = 0.0
+DROPOUT = 0.5
 
 # global variables
 loss_object = SparseCategoricalCrossentropy(from_logits=True,
@@ -410,7 +410,7 @@ def train_seq2seq(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=False, use
     
     checkpoint_manager = tf.train.CheckpointManager(checkpoint,
                                                     fn,
-                                                    max_to_keep=1)
+                                                    max_to_keep=2)
 
     if pre_train:
         # ------ Pretrain on Movie dataset ------ #
@@ -608,7 +608,7 @@ class ChatBot(evaluate.BaseBot):
         
         ckpt = tf.train.Checkpoint(encoder=self.encoder, decoder=self.decoder)
         manager = tf.train.CheckpointManager(ckpt, fn,
-                                             max_to_keep=1)
+                                             max_to_keep=2)
         
         ckpt.restore(manager.latest_checkpoint).expect_partial()
         if manager.latest_checkpoint:
@@ -771,9 +771,11 @@ class ChatBot(evaluate.BaseBot):
                                                  self.reply_length, batch_size, False)
         ppl = 0
         
-        enc_state = tf.zeros((1, LSTM_DIM))
+        
         
         for (encoder_input, segment_input, decoder_target) in dataset:
+            enc_state = tf.zeros((tf.shape(encoder_input)[0], LSTM_DIM))
+            
             encoder_outputs, *initial_state = self.encoder(
                 [encoder_input, segment_input, enc_state])
             

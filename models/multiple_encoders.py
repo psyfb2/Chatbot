@@ -14,7 +14,7 @@ from beamsearch import beam_search
 
 # hyperparameters
 LSTM_DIM = 512
-DROPOUT = 0.0
+DROPOUT = 0.5
 
 # global variables
 # global variables
@@ -478,7 +478,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
     
     checkpoint_manager = tf.train.CheckpointManager(checkpoint,
                                                     fn,
-                                                    max_to_keep=1)
+                                                    max_to_keep=2)
     
     if pre_train:
         # ------ Pretrain on Movie dataset ------ #
@@ -688,7 +688,7 @@ class ChatBot(evaluate.BaseBot):
         
         ckpt = tf.train.Checkpoint(encoder=self.encoder, decoder=self.decoder)
         manager = tf.train.CheckpointManager(ckpt, fn,
-                                             max_to_keep=1)
+                                             max_to_keep=2)
         
         ckpt.restore(manager.latest_checkpoint).expect_partial()
         if manager.latest_checkpoint:
@@ -862,7 +862,7 @@ class ChatBot(evaluate.BaseBot):
 
         ppl = 0
         
-        enc_state = tf.zeros((1, LSTM_DIM))
+        enc_state = tf.zeros((batch_size, LSTM_DIM))
         
         for (persona, msg, decoder_target) in dataset:
             encoder_persona_states, encoder_msg_states, *initial_state = self.encoder(
