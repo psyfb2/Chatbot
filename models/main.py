@@ -98,7 +98,7 @@ if __name__ == '__main__':
     parser.add_argument("--verbose", default=0, type=int,
                         help="Display loss for each batch during training")
     
-    parser.add_argument("--min_epochs", default=10, type=int,
+    parser.add_argument("--min_epochs", default=15, type=int,
                         help="a minimum number of epochs which the model must be trained for on the PERSONA-CHAT dataset regardless of early stopping")
     
     parser.add_argument("--glove_filename", default="glove.6B.300d.txt", type=str,

@@ -43,6 +43,7 @@ loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True,
 train_loss = tf.keras.metrics.Mean(name='train_loss')
 train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
 val_loss = tf.keras.metrics.Mean(name='val_loss')
+val_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='val_accuracy')
 transformer = None
 checkpoint = None
 checkpoint_manager = None
@@ -591,6 +592,7 @@ def val_step(msg_batch, seg_batch, reply_batch):
     loss = loss_function(reply_target_batch, generated_sentences)
         
     val_loss(loss)
+    val_accuracy(reply_target_batch, generated_sentences)
 
 @tf.function
 def train_step(msg_batch, seg_batch, reply_batch):
@@ -618,6 +620,7 @@ def train_step(msg_batch, seg_batch, reply_batch):
 
 def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
     min_val_loss = float("inf")
+    min_val_accuracy = float("inf")
     no_improvement_counter = 0
     
     for epoch in range(EPOCHS):
@@ -640,6 +643,7 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
                 val_step(msg, seg, reply)
                 
             val_loss_result = val_loss.result()
+            val_accuracy_result = val_accuracy.result()
             
             if val_loss_result < min_val_loss:
                 save_path = checkpoint_manager.save()
@@ -648,6 +652,15 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
                 print("Transformer checkpoint saved: %s" % save_path)
                 no_improvement_counter = 0
                 min_val_loss = val_loss_result
+                
+            elif val_accuracy_result < min_val_accuracy:
+                save_path = checkpoint_manager.save()
+                print("best val accuracy decreased from %f to %f" % 
+                      (min_val_accuracy, val_accuracy_result))
+                print("Transformer checkpoint saved: %s" % save_path)
+                no_improvement_counter = 0
+                min_val_accuracy = val_accuracy_result
+                
             else:
                 no_improvement_counter += 1            
         
