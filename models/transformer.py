@@ -620,7 +620,6 @@ def train_step(msg_batch, seg_batch, reply_batch):
 
 def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
     min_val_loss = float("inf")
-    min_val_accuracy = float("inf")
     no_improvement_counter = 0
     
     for epoch in range(EPOCHS):
@@ -653,15 +652,6 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
                 print("Transformer checkpoint saved: %s" % save_path)
                 no_improvement_counter = 0
                 min_val_loss = val_loss_result
-                
-            elif val_accuracy_result < min_val_accuracy:
-                save_path = checkpoint_manager.save()
-                print("best val accuracy decreased from %f to %f" % 
-                      (min_val_accuracy, val_accuracy_result))
-                print("Transformer checkpoint saved: %s" % save_path)
-                no_improvement_counter = 0
-                min_val_accuracy = val_accuracy_result
-                
             else:
                 no_improvement_counter += 1            
         
@@ -694,29 +684,54 @@ def data_pipeline(filename, tokenizer, in_seq_length, out_seq_length, BATCH_SIZE
     ''' Load data from file into integer encoded format '''
     BUFFER_SIZE = 15000
     
-    train_personas, train_data = pre.load_dataset(filename)
-
-    raw_msg = [msg for msg in train_data[:20, 0]]
-    raw_persona = [train_personas[int(p_index)] for p_index in train_data[:20, 2]]
+    if filename in [pre.TRAIN_FN, pre.VALID_FN, pre.TEST_FN]:
+        train_personas, train_data = pre.load_dataset(filename)
     
-    # integer encode sequences
-    encoder_input, decoder_target = encode_training_examples(train_personas, 
-                                                             train_data, tokenizer, 
-                                                             in_seq_length, out_seq_length)
-    segment_input  = np.array([generate_segment_list(encoded_msg, 
-                               in_seq_length, tokenizer.vocab_size + SEP) for encoded_msg in encoder_input])
+        raw_msg = [msg for msg in train_data[:20, 0]]
+        raw_persona = [train_personas[int(p_index)] for p_index in train_data[:20, 2]]
+        
+        # integer encode sequences
+        encoder_input, decoder_target = encode_training_examples(train_personas, 
+                                                                 train_data, tokenizer, 
+                                                                 in_seq_length, out_seq_length)
+        segment_input  = np.array([generate_segment_list(encoded_msg, 
+                                   in_seq_length, tokenizer.vocab_size + SEP) for encoded_msg in encoder_input])
+        
+        dataset = tf.data.Dataset.from_tensor_slices(
+            (encoder_input, segment_input, decoder_target)).cache().shuffle(BUFFER_SIZE)
+        dataset = dataset.batch(BATCH_SIZE)
+        
+        num_examples = len(encoder_input)
+        
+        return dataset, num_examples, raw_msg, raw_persona
     
-    dataset = tf.data.Dataset.from_tensor_slices(
-        (encoder_input, segment_input, decoder_target)).cache().shuffle(BUFFER_SIZE)
-    dataset = dataset.batch(BATCH_SIZE)
+    else:
+        if filename == pre.MOVIE_FN:
+            conversations = pre.load_movie_dataset()
+        else:
+            conversations = pre.load_dailydialogue_dataset()
+        
+        encoder_input, decoder_target = encode_training_examples(None, conversations, 
+                                                             tokenizer, in_seq_length,
+                                                             out_seq_length)
+        
+        segment_input = np.array([generate_segment_list(encoded, in_seq_length, -1,
+                                  False) for encoded in encoder_input])
+        (encoder_input, encoder_input_val, segment_input, 
+         segment_input_val, decoder_target, decoder_target_val) = train_test_split(
+             encoder_input, segment_input, decoder_target, test_size=0.1)
+        
+        dataset = tf.data.Dataset.from_tensor_slices(
+            (encoder_input, segment_input, decoder_target)).cache().shuffle(15000)
+        dataset = dataset.batch(BATCH_SIZE)
+        
+        val_dataset = tf.data.Dataset.from_tensor_slices(
+            (encoder_input_val, segment_input_val, decoder_target_val))
+        val_dataset = val_dataset.batch(BATCH_SIZE)
+        
+        return dataset, val_dataset
     
-    num_examples = len(encoder_input)
-    
-    return dataset, num_examples, raw_msg, raw_persona
-    
-    
-
-def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embedding=True):
+def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embedding=True, pre_train=True):
     global transformer
     global checkpoint
     global checkpoint_manager
@@ -751,30 +766,24 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
                                                     pre.TRANSFORMER_CHECKPOINT_PATH,
                                                     max_to_keep=2)
     
-    # pretrain on daily dialogue
-    conversations = pre.load_dailydialogue_dataset()
+    if pre_train:
+        # pretrain on movie data
+        dataset, val_dataset = data_pipeline(pre.MOVIE_FN, tokenizer, 
+                                             in_seq_length, out_seq_length, 
+                                             BATCH_SIZE)
 
-    encoder_input, decoder_target = encode_training_examples(None, conversations, 
-                                                             tokenizer, in_seq_length,
-                                                             out_seq_length)
-    segment_input = np.array([generate_segment_list(encoded, in_seq_length, -1,
-                              False) for encoded in encoder_input])
-    (encoder_input, encoder_input_val, segment_input, 
-     segment_input_val, decoder_target, decoder_target_val) = train_test_split(
-         encoder_input, segment_input, decoder_target, test_size=0.1)
-    
-    dataset = tf.data.Dataset.from_tensor_slices(
-        (encoder_input, segment_input, decoder_target)).cache().shuffle(15000)
-    dataset = dataset.batch(BATCH_SIZE)
-    
-    val_dataset = tf.data.Dataset.from_tensor_slices(
-        (encoder_input_val, segment_input_val, decoder_target_val))
-    val_dataset = val_dataset.batch(BATCH_SIZE)
-
-    encoder_input, segment_input, decoder_target = None, None, None
-    encoder_input_val, segment_input_val, decoder_target_val = None, None, None
-    
-    train(dataset, val_dataset, 100, 0, 3)
+        train(dataset, val_dataset, 100, 0, 3)
+        
+        print("Finished training on movie dataset")
+        
+        # pretrain on daily dialog
+        dataset, val_dataset = data_pipeline(pre.DAILYDIALOGUE_FN, tokenizer, 
+                                             in_seq_length, out_seq_length, 
+                                             BATCH_SIZE)
+ 
+        train(dataset, val_dataset, 100, 0, 3)
+        
+        print("Finished daily dialog pretraining\n")
     
     # train on PERSONA-CHAT
     dataset, _, raw_msg, raw_persona = data_pipeline(pre.TRAIN_FN, tokenizer,

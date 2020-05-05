@@ -92,8 +92,8 @@ if __name__ == '__main__':
     parser.add_argument("--segment_embedding", default=True, type=str2bool,
                         help="Whether or not to add an additional segment embedding to seq2seq models so that it can better distiguish persona from message.")
     
-    parser.add_argument("--perform_pretraining", default=False, type=str2bool,
-                        help="Perform pretraining on movie, dialy dialog datasets? default = False")
+    parser.add_argument("--perform_pretraining", default=True, type=str2bool,
+                        help="Perform pretraining on movie, dialy dialog datasets?")
     
     parser.add_argument("--verbose", default=0, type=int,
                         help="Display loss for each batch during training")
@@ -170,7 +170,7 @@ if __name__ == '__main__':
         elif args.train == model_choices[5]:
             transformer.train_transformer(args.epochs, args.batch_size, 
                                           args.early_stopping_patience, args.min_epochs,
-                                          args.segment_embedding)
+                                          args.segment_embedding, args.perform_pretraining)
     if args.eval != None:
         print("Calculating Perplexity, this can take some time")
         chatbot = get_chatbot(args.eval, model_choices)
