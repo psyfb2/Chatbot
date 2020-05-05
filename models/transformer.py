@@ -11,6 +11,7 @@ import tensorflow_datasets as tfds
 from tensorflow.keras.layers import Dense, LayerNormalization, Dropout, Embedding
 from time import time
 from beamsearch import beam_search
+from sklearn.model_selection import train_test_split
 
 # tokens
 SOS = 0
@@ -731,13 +732,6 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
     print("Output Length: %d" % out_seq_length)
     print("Vocab Size: %d" % vocab_size)
     
-    dataset, _, raw_msg, raw_persona = data_pipeline(pre.TRAIN_FN, tokenizer,
-                                                     in_seq_length, out_seq_length,
-                                                     BATCH_SIZE)
-    val_dataset, _, val_raw_msg, val_raw_persona = data_pipeline(pre.VALID_FN, tokenizer,
-                                                                 in_seq_length, out_seq_length,
-                                                                 BATCH_SIZE)
-    
     vocab_size = tokenizer.vocab_size + 3
     
     transformer = Transformer(D_MODEL, NUM_LAYERS, NUM_HEADS, D_FF,
@@ -756,6 +750,39 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
     checkpoint_manager = tf.train.CheckpointManager(checkpoint,
                                                     pre.TRANSFORMER_CHECKPOINT_PATH,
                                                     max_to_keep=2)
+    
+    # pretrain on daily dialogue
+    conversations = pre.load_dailydialogue_dataset()
+
+    encoder_input, decoder_target = encode_training_examples(None, conversations, 
+                                                             tokenizer, in_seq_length,
+                                                             out_seq_length)
+    segment_input = np.array([generate_segment_list(encoded, in_seq_length, -1,
+                              False) for encoded in encoder_input])
+    (encoder_input, encoder_input_val, segment_input, 
+     segment_input_val, decoder_target, decoder_target_val) = train_test_split(
+         encoder_input, segment_input, decoder_target, test_size=0.1)
+    
+    dataset = tf.data.Dataset.from_tensor_slices(
+        (encoder_input, segment_input, decoder_target)).cache().shuffle(15000)
+    dataset = dataset.batch(BATCH_SIZE)
+    
+    val_dataset = tf.data.Dataset.from_tensor_slices(
+        (encoder_input_val, segment_input_val, decoder_target_val))
+    val_dataset = val_dataset.batch(BATCH_SIZE)
+
+    encoder_input, segment_input, decoder_target = None, None, None
+    encoder_input_val, segment_input_val, decoder_target_val = None, None, None
+    
+    train(dataset, val_dataset, 100, 0, 3)
+    
+    # train on PERSONA-CHAT
+    dataset, _, raw_msg, raw_persona = data_pipeline(pre.TRAIN_FN, tokenizer,
+                                                     in_seq_length, out_seq_length,
+                                                     BATCH_SIZE)
+    val_dataset, _, val_raw_msg, val_raw_persona = data_pipeline(pre.VALID_FN, tokenizer,
+                                                                 in_seq_length, out_seq_length,
+                                                                 BATCH_SIZE)
     
     train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE)
     
