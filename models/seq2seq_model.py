@@ -14,7 +14,7 @@ from beamsearch import beam_search
 
 # hyperparameters
 LSTM_DIM = 512
-DROPOUT = 0.5
+DROPOUT = 0.2
 
 # global variables
 loss_object = SparseCategoricalCrossentropy(from_logits=True,

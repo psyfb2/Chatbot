@@ -321,14 +321,13 @@ class Transformer(tf.keras.Model):
                  use_segment_embedding, dropout=0.1):
         super(Transformer, self).__init__()
         
-        encoder_embedding = Embedding(vocab_size, d_model)
-        decoder_embedding = Embedding(vocab_size, d_model)
+        tied_embedding = Embedding(vocab_size, d_model)
         
         self.encoder = Encoder(num_layers, d_model, num_heads, d_ff, 
-                               encoder_embedding, input_max_pos, use_segment_embedding,
+                               tied_embedding, input_max_pos, use_segment_embedding,
                                dropout)
         self.decoder = Decoder(num_layers, d_model, num_heads, d_ff, 
-                               decoder_embedding, output_max_pos, dropout)
+                               tied_embedding, output_max_pos, dropout)
         
         self.output_layer = Dense(vocab_size)
     
@@ -628,6 +627,7 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
         train_loss.reset_states()
         train_accuracy.reset_states()
         val_loss.reset_states()
+        val_accuracy.reset_states()
         
         # train
         for(batch, (msg, seg, reply)) in enumerate(dataset):
