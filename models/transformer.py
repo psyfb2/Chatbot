@@ -766,16 +766,7 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
                                                     pre.TRANSFORMER_CHECKPOINT_PATH,
                                                     max_to_keep=2)
     
-    if pre_train:
-        # pretrain on movie data
-        dataset, val_dataset = data_pipeline(pre.MOVIE_FN, tokenizer, 
-                                             in_seq_length, out_seq_length, 
-                                             BATCH_SIZE)
-
-        train(dataset, val_dataset, 100, 0, 3)
-        
-        print("Finished training on movie dataset")
-        
+    if pre_train:        
         # pretrain on daily dialog
         dataset, val_dataset = data_pipeline(pre.DAILYDIALOGUE_FN, tokenizer, 
                                              in_seq_length, out_seq_length, 
