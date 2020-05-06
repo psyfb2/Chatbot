@@ -364,7 +364,8 @@ class TransformerSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     ''' Learning rate scheduler for Adam https://arxiv.org/pdf/1706.03762.pdf '''
     def __init__(self, d_model, warmup_steps=4000):
         super(TransformerSchedule, self).__init__()
-        self.d_model = tf.cast(d_model, dtype=tf.float32)
+        self.d_model = d_model
+        self.d_model = tf.cast(self.d_model, dtype=tf.float32)
         self.warmup_steps = warmup_steps
     
     def __call__(self, step):
@@ -418,9 +419,8 @@ def dot_product_attention(q, k, v, mask):
 
 def MLP(d_model, hidden_units):
     ''' Feed Forward Transformer Layer '''
-    return tf.keras.Sequential([Dense(hidden_units),
+    return tf.keras.Sequential([Dense(hidden_units, activation="relu"),
                                 Dense(d_model)])
-
 
 def get_angles(pos, i, d_model):
     angle_freq = 1 / np.power(10000, (2 * (i//2)) / np.float32(d_model))
@@ -820,6 +820,7 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
     
     
 def response_diversity():
+    return 1.0
     replys = []
     for i in range(len(raw_msg)):
         reply, _ = generate_reply_transformer(raw_persona[i], raw_msg[i],
