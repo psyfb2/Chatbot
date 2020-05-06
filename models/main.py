@@ -92,7 +92,7 @@ if __name__ == '__main__':
     parser.add_argument("--segment_embedding", default=True, type=str2bool,
                         help="Whether or not to add an additional segment embedding to seq2seq models so that it can better distiguish persona from message.")
     
-    parser.add_argument("--perform_pretraining", default=True, type=str2bool,
+    parser.add_argument("--perform_pretraining", default=False, type=str2bool,
                         help="Perform pretraining on movie, dialy dialog datasets?")
     
     parser.add_argument("--verbose", default=0, type=int,

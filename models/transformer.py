@@ -49,6 +49,9 @@ transformer = None
 checkpoint = None
 checkpoint_manager = None
 optimizer = None
+raw_persona = None
+raw_msg = None
+tokenizer = None
 
 
 class MultiHeadAttention(tf.keras.layers.Layer):
@@ -322,13 +325,14 @@ class Transformer(tf.keras.Model):
                  use_segment_embedding, dropout=0.1):
         super(Transformer, self).__init__()
         
-        tied_embedding = Embedding(vocab_size, d_model)
+        encoder_embedding = Embedding(vocab_size, d_model)
+        decoder_embedding = Embedding(vocab_size, d_model)
         
         self.encoder = Encoder(num_layers, d_model, num_heads, d_ff, 
-                               tied_embedding, input_max_pos, use_segment_embedding,
+                               encoder_embedding, input_max_pos, use_segment_embedding,
                                dropout)
         self.decoder = Decoder(num_layers, d_model, num_heads, d_ff, 
-                               tied_embedding, output_max_pos, dropout)
+                               decoder_embedding, output_max_pos, dropout)
         
         self.output_layer = Dense(vocab_size)
     
@@ -668,13 +672,17 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
                                                                  time() - elapsed,
                                                                  train_loss.result(),
                                                                  train_accuracy.result()))
+        
+        r = response_diversity()
+        print("Same responses: %f" % r)
+        
         # early stopping
-        if epoch + 1 == MIN_EPOCHS:
+        if epoch + 1 == MIN_EPOCHS and r != 1.0:
             save_path = checkpoint_manager.save()
             print("min epochs %d reached" % MIN_EPOCHS)
             print("Transformer checkpoint saved: %s" % save_path)
             
-        if no_improvement_counter >= PATIENCE and epoch > MIN_EPOCHS:
+        if no_improvement_counter >= PATIENCE and epoch > MIN_EPOCHS and r != 1.0:
             print("Early stopping, no improvement over minimum in %d epochs" % PATIENCE)
             return epoch + 1
         
@@ -736,6 +744,9 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
     global checkpoint
     global checkpoint_manager
     global optimizer
+    global raw_persona
+    global raw_msg
+    global tokenizer
     
     tokenizer, in_seq_length, out_seq_length = create_subword_tokenizer()
     # +3 for SOS, SEP, EOS tokens
@@ -807,6 +818,18 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
         print("Message:", val_raw_msg[i])
         print("Reply:", reply, "\n")
     
+    
+def response_diversity():
+    replys = []
+    for i in range(len(raw_msg)):
+        reply, _ = generate_reply_transformer(raw_persona[i], raw_msg[i],
+                                              tokenizer, transformer,
+                                              24)
+        replys.append(reply)
+    
+    # percentage of replies that are identical to first reply
+    return replys.count(replys[0]) / len(replys)
+        
 
 '''
 Tried to convert generate_reply_transformer into a tf.function
