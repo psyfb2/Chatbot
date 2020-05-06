@@ -820,7 +820,6 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
     
     
 def response_diversity():
-    return 1.0
     replys = []
     for i in range(len(raw_msg)):
         reply, _ = generate_reply_transformer(raw_persona[i], raw_msg[i],
