@@ -673,9 +673,6 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
                                                                  train_loss.result(),
                                                                  train_accuracy.result()))
         
-        r = response_diversity()
-        print("Same responses: %f" % r)
-        
         # early stopping
         if epoch + 1 == MIN_EPOCHS and r != 1.0:
             save_path = checkpoint_manager.save()
@@ -817,22 +814,7 @@ def train_transformer(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, use_segment_embe
         print("Persona:", val_raw_persona[i])
         print("Message:", val_raw_msg[i])
         print("Reply:", reply, "\n")
-    
-    
-def response_diversity():
-    replys = []
-    if raw_msg is None:
-        return 0.0
-    
-    for i in range(len(raw_msg)):
-        reply, _ = generate_reply_transformer(raw_persona[i], raw_msg[i],
-                                              tokenizer, transformer,
-                                              24)
-        replys.append(reply)
-    
-    # percentage of replies that are identical to first reply
-    return replys.count(replys[0]) / len(replys)
-        
+            
 
 '''
 Tried to convert generate_reply_transformer into a tf.function
