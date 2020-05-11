@@ -17,7 +17,6 @@ LSTM_DIM = 512
 DROPOUT = 0.2
 
 # global variables
-# global variables
 loss_object = SparseCategoricalCrossentropy(from_logits=True,
                                             reduction='none')
 optimizer = Adam()
@@ -109,10 +108,14 @@ class MultipleDecoder(tf.keras.Model):
         input_word, encoder_persona_outputs, encoder_msg_outputs, is_training, hidden = inputs
         h1 = hidden[0]
         
-        # => (batch_size, 1, n_units)
+        # => (batch_size, n_units * 4)
+        input_embed = self.embedding(input_word)
+        decoder_output, h1 = self.gru1(input_embed, initial_state=h1)
+        
+         # => (batch_size, 1, n_units)
         decoder_state = tf.expand_dims(h1, 1)
         
-        # ------ Attention on Persona Encoder  ------ #
+         # ------ Attention on Persona Encoder  ------ #
         # score shape => (batch_size, src_timesteps, 1)
         score = self.persona_V(
             tf.nn.tanh(self.persona_W1(encoder_persona_outputs) + self.persona_W2(decoder_state)) )
@@ -138,18 +141,13 @@ class MultipleDecoder(tf.keras.Model):
         msg_context_vec = tf.reduce_sum(msg_context_vec, axis=1)
         # ------ ------ #
         
-        # => (batch_size, n_units * 4)
-        context_vec_concat = tf.concat([persona_context_vec, msg_context_vec], axis=-1)
-        
-        input_embed = self.embedding(input_word)
-        
-        # feed context vector as input into GRU at current timestep
-        input_embed = tf.concat([tf.expand_dims(context_vec_concat, 1), input_embed], axis=-1)
-        
-        decoder_output, h1 = self.gru1(input_embed, initial_state=h1)
-        
         # (batch_size, 1, n_units) => (batch_size, n_units)
         decoder_output = tf.reshape(decoder_output, (-1, decoder_output.shape[2]))
+        
+        # feed context vec + decoder output into dense
+        context_vec_concat = tf.concat([persona_context_vec, msg_context_vec], axis=-1)
+        decoder_output = tf.concat([context_vec_concat, input_embed], axis=-1)
+        
                 
         decoder_output = self.dropout(decoder_output, training=is_training)
         decoder_output = self.out_dense1(decoder_output)
@@ -861,10 +859,11 @@ class ChatBot(evaluate.BaseBot):
         self.msg_length, self.reply_length, batch_size, False)
 
         ppl = 0
-        
-        enc_state = tf.zeros((batch_size, LSTM_DIM))
+
         
         for (persona, msg, decoder_target) in dataset:
+            enc_state = tf.zeros((tf.shape(persona)[0], LSTM_DIM))
+            
             encoder_persona_states, encoder_msg_states, *initial_state = self.encoder(
                 [persona, msg, enc_state])
             

@@ -13,6 +13,7 @@ import transformer
 import tensorflow as tf
 from multiple_encoders import ChatBot as me_chatbot
 from sys import exit
+import random
     
 def input_number(prompt, limit):
     '''
@@ -193,8 +194,16 @@ if __name__ == '__main__':
         persona = pre.get_only_personas()
         persona_num = input_number("Please choose a persona number between 0 - %d: " % (len(persona) - 1),
                                    len(persona) - 1)
+        personas = persona
         persona = persona[persona_num]
-        print("Persona: %s\n" % persona)
+        
+        if random.randint(100, 1000) % 2 == 0:
+            print("Persona: %s\n" % persona)
+            print("Persona: %s\n" % personas[random.randint(0, 500)])
+        else:
+            print("Persona: %s\n" % personas[random.randint(0, 500)])
+            print("Persona: %s\n" % persona)
+            
         
         print("Talking with %s model, enter <exit> to close this program\n" % args.talk)
         
@@ -219,3 +228,5 @@ if __name__ == '__main__':
                 # keeping track of attention weights for beams is costly
                 # so only do this for greedy search
                 chatbot.plot_attn()
+        
+        print("Persona: %s\n" % persona)
