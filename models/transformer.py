@@ -325,14 +325,13 @@ class Transformer(tf.keras.Model):
                  use_segment_embedding, dropout=0.1):
         super(Transformer, self).__init__()
         
-        encoder_embedding = Embedding(vocab_size, d_model)
-        decoder_embedding = Embedding(vocab_size, d_model)
+        tied_embedding = Embedding(vocab_size, d_model)
         
         self.encoder = Encoder(num_layers, d_model, num_heads, d_ff, 
-                               encoder_embedding, input_max_pos, use_segment_embedding,
+                               tied_embedding, input_max_pos, use_segment_embedding,
                                dropout)
         self.decoder = Decoder(num_layers, d_model, num_heads, d_ff, 
-                               decoder_embedding, output_max_pos, dropout)
+                               tied_embedding, output_max_pos, dropout)
         
         self.output_layer = Dense(vocab_size)
     
@@ -1077,7 +1076,7 @@ class ChatBot(evaluate.BaseBot):
         '''
         get_reply = (lambda persona, msg : 
                      generate_reply_transformer(persona, msg, self.tokenizer,
-                                                self.transformer, self.out_seq_length))
+                                                self.transformer, self.out_seq_length)[0])
         return evaluate.f1(get_reply)
             
     
