@@ -673,12 +673,12 @@ def train(dataset, val_dataset, EPOCHS, MIN_EPOCHS, PATIENCE):
                                                                  train_accuracy.result()))
         
         # early stopping
-        if epoch + 1 == MIN_EPOCHS and r != 1.0:
+        if epoch + 1 == MIN_EPOCHS:
             save_path = checkpoint_manager.save()
             print("min epochs %d reached" % MIN_EPOCHS)
             print("Transformer checkpoint saved: %s" % save_path)
             
-        if no_improvement_counter >= PATIENCE and epoch > MIN_EPOCHS and r != 1.0:
+        if no_improvement_counter >= PATIENCE and epoch > MIN_EPOCHS:
             print("Early stopping, no improvement over minimum in %d epochs" % PATIENCE)
             return epoch + 1
         
