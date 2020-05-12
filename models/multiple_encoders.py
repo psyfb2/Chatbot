@@ -146,7 +146,7 @@ class MultipleDecoder(tf.keras.Model):
         
         # feed context vec + decoder output into dense
         context_vec_concat = tf.concat([persona_context_vec, msg_context_vec], axis=-1)
-        decoder_output = tf.concat([context_vec_concat, input_embed], axis=-1)
+        decoder_output = tf.concat([context_vec_concat, decoder_output], axis=-1)
         
                 
         decoder_output = self.dropout(decoder_output, training=is_training)
