@@ -1,0 +1,31 @@
+seq2seq
+fluency:
+enganginess:
+consistency:
+persona:
+perplexity:
+f1:
+
+multiple encoders
+fluency:
+enganginess:
+consistency:
+persona:
+perplexity:
+f1:
+
+transformer
+fluency:
+enganginess:
+consistency:
+persona:
+perplexity:
+f1:
+
+transformer big
+fluency:
+enganginess:
+consistency:
+persona:
+perplexity: 46.3
+f1: 0.140

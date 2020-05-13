@@ -102,14 +102,17 @@ class MultipleDecoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs => [input_word, encoder_persona_outputs, encoder_msg_outputs, is_training, [h1]]
-        returns => decoder_output, persona_attn_weights, msg_attn_weights, h1
+        inputs => [input_word, encoder_persona_outputs, encoder_msg_outputs, is_training, context_vec, [h1]]
+        returns => decoder_output, persona_attn_weights, msg_attn_weights, context_vec, h1
         '''
-        input_word, encoder_persona_outputs, encoder_msg_outputs, is_training, hidden = inputs
+        input_word, encoder_persona_outputs, encoder_msg_outputs, is_training, context_vec, hidden = inputs
         h1 = hidden[0]
         
-        # => (batch_size, n_units * 4)
+        # => (batch_size, seq_length, 300)
         input_embed = self.embedding(input_word)
+        
+        # concat context vector from previous timestep
+        input_embed = tf.concat([input_embed, tf.expand_dims(context_vec, 1)], axis=-1)
         decoder_output, h1 = self.gru1(input_embed, initial_state=h1)
         
          # => (batch_size, 1, n_units)
@@ -147,12 +150,11 @@ class MultipleDecoder(tf.keras.Model):
         # feed context vec + decoder output into dense
         context_vec_concat = tf.concat([persona_context_vec, msg_context_vec], axis=-1)
         decoder_output = tf.concat([context_vec_concat, decoder_output], axis=-1)
-        
                 
         decoder_output = self.dropout(decoder_output, training=is_training)
         decoder_output = self.out_dense1(decoder_output)
         
-        return decoder_output, persona_attn_weights, msg_attn_weights, h1
+        return decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1
         
 class DeepMultipleEncoder(tf.keras.Model):
     ''' 
@@ -260,11 +262,19 @@ class DeepMultipleDecoder(tf.keras.Model):
     @tf.function
     def call(self, inputs):
         '''
-        inputs => [input_word, encoder_persona_outputs, encoder_msg_outputs, is_training, [h1, h2, h3, h4]]
-        returns => decoder_output, persona_attn_weights, msg_attn_weights, h1, h2, h3, h4
+        inputs => [input_word, encoder_persona_outputs, encoder_msg_outputs, is_training, context_vec, [h1, h2, h3, h4]]
+        returns => decoder_output, persona_attn_weights, msg_attn_weights, context_vec, h1, h2, h3, h4
         '''
-        input_word, encoder_persona_outputs, encoder_msg_outputs, is_training, hidden = inputs
+        input_word, encoder_persona_outputs, encoder_msg_outputs, is_training, context_vec, hidden = inputs
         h1, h2, h3, h4 = hidden
+        
+        input_embed = self.embedding(input_word)
+        input_embed = tf.concat([input_embed, tf.expand_dims(context_vec, 1)], axis=-1)
+        
+        decoder_output, h1 = self.gru1(input_embed, initial_state=h1)
+        decoder_output, h2 = self.gru2(decoder_output, initial_state=h2)
+        decoder_output, h3 = self.gru3(decoder_output, initial_state=h3)
+        decoder_output, h4 = self.gru4(decoder_output, initial_state=h4)
         
         # => (batch_size, 1, n_units)
         decoder_state = tf.expand_dims(h4, 1)
@@ -295,26 +305,17 @@ class DeepMultipleDecoder(tf.keras.Model):
         msg_context_vec = tf.reduce_sum(msg_context_vec, axis=1)
         # ------ ------ #
         
-        # => (batch_size, n_units * 4)
-        context_vec_concat = tf.concat([persona_context_vec, msg_context_vec], axis=-1)
-        
-        input_embed = self.embedding(input_word)
-        
-        # feed context vector as input into GRU at current timestep
-        input_embed = tf.concat([tf.expand_dims(context_vec_concat, 1), input_embed], axis=-1)
-        
-        decoder_output, h1 = self.gru1(input_embed, initial_state=h1)
-        decoder_output, h2 = self.gru2(decoder_output, initial_state=h2)
-        decoder_output, h3 = self.gru3(decoder_output, initial_state=h3)
-        decoder_output, h4 = self.gru4(decoder_output, initial_state=h4)
-        
         # (batch_size, 1, n_units) => (batch_size, n_units)
         decoder_output = tf.reshape(decoder_output, (-1, decoder_output.shape[2]))
+        
+        # feed context vec + decoder output into dense
+        context_vec_concat = tf.concat([persona_context_vec, msg_context_vec], axis=-1)
+        decoder_output = tf.concat([context_vec_concat, decoder_output], axis=-1)
                 
         decoder_output = self.dropout(decoder_output, training=is_training)
         decoder_output = self.out_dense1(decoder_output)
         
-        return decoder_output, persona_attn_weights, msg_attn_weights, h1, h2, h3, h4
+        return decoder_output, persona_attn_weights, msg_attn_weights, context_vec_concat, h1, h2, h3, h4
     
 def loss_function(label, pred, loss_object):
     '''
@@ -341,9 +342,12 @@ def calc_val_loss(batches_per_epoch, val_dataset):
             [persona, msg, enc_state])
         
         decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_persona_states.shape[0], 1)
-    
+        context_vec = tf.zeros((tf.shape(encoder_persona_states)[0],
+                                tf.shape(encoder_persona_states)[-1] + tf.shape(encoder_msg_states)[-1]))
+        
         for t in range(1, decoder_target.shape[1]):
-            predictions, _, _, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, False, initial_state])
+            predictions, _, _, context_vec, *initial_state = decoder([decoder_input, encoder_persona_states, 
+                                                                      encoder_msg_states, False, context_vec, initial_state])
             
             loss += loss_function(decoder_target[:, t], predictions, loss_object)
             
@@ -371,10 +375,12 @@ def train_step(persona, msg, decoder_target, BATCH_SIZE):
             [persona, msg, enc_state])
         
         decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]] * BATCH_SIZE, 1)
+        context_vec = tf.zeros((tf.shape(encoder_persona_states)[0],
+                                tf.shape(encoder_persona_states)[-1] + tf.shape(encoder_msg_states)[-1]))
         
         # Teacher forcing, ground truth for previous word input to the decoder at current timestep
         for t in range(1, decoder_target.shape[1]):
-            predictions, _, _, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, True, initial_state])
+            predictions, _, _, context_vec, *initial_state = decoder([decoder_input, encoder_persona_states, encoder_msg_states, True, context_vec, initial_state])
             
             loss += loss_function(decoder_target[:, t], predictions, loss_object)
             
@@ -582,6 +588,7 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
 def data_pipeline(filename, tokenizer, persona_length, msg_length, out_seq_length, BATCH_SIZE, drop_remainder=True):
     ''' Load and integer encode persona chat dataset '''
     personas, data = pre.load_dataset(filename)
+    data = data[:1] # REMOVE ME
     
     encoder_persona_input  = np.array(
         [pre.START_SEQ_TOKEN + ' ' + personas[int(row[2])] + ' ' 
@@ -627,10 +634,13 @@ def generate_reply_multiple_encoder(encoder, decoder, tokenizer, persona, msg, p
     
     decoder_input = tf.expand_dims([tokenizer.word_index[pre.START_SEQ_TOKEN]], 0)
     
+    context_vec = tf.zeros((tf.shape(encoder_persona_states)[0],
+                                tf.shape(encoder_persona_states)[-1] + tf.shape(encoder_msg_states)[-1]))
+    
     reply = []
     for t in range(out_seq_length):
-        softmax_layer, persona_attn_score, msg_attn_score, *initial_state = decoder(
-            [decoder_input, encoder_persona_states, encoder_msg_states, False, initial_state])
+        softmax_layer, persona_attn_score, msg_attn_score, context_vec, *initial_state = decoder(
+            [decoder_input, encoder_persona_states, encoder_msg_states, False, context_vec, initial_state])
         persona_attn_score = tf.reshape(persona_attn_score, (-1,))
         persona_attn_weights[t] = persona_attn_score.numpy()
         
@@ -777,6 +787,7 @@ class ChatBot(evaluate.BaseBot):
             msg = tf.convert_to_tensor(msg)
             
             enc_state = tf.zeros((1, LSTM_DIM))
+            
             encoder_persona_states, encoder_msg_states, *initial_state = self.encoder(
                 [persona, msg, enc_state])
             
@@ -789,14 +800,15 @@ class ChatBot(evaluate.BaseBot):
             if state is None:
                 # first call to pred function
                 encoder_persona_states, encoder_msg_states, initial_state = inputs
+                context_vec = tf.zeros((1, LSTM_DIM * 4))
             else:
-                encoder_persona_states, encoder_msg_states, initial_state = state
+                encoder_persona_states, encoder_msg_states, context_vec, initial_state = state
                 
-            logits, _, _, *initial_state = self.decoder(
-            [decoder_input, encoder_persona_states, encoder_msg_states, False, initial_state])
+            logits, _, _, context_vec, *initial_state = self.decoder(
+            [decoder_input, encoder_persona_states, encoder_msg_states, False, context_vec, initial_state])
             
             # return output and new state 
-            return logits[0], [encoder_persona_states, encoder_msg_states, initial_state]
+            return logits[0], [encoder_persona_states, encoder_msg_states, context_vec, initial_state]
         
         sos = self.tokenizer.word_index[pre.START_SEQ_TOKEN]
         eos = self.tokenizer.word_index[pre.END_SEQ_TOKEN]
@@ -869,11 +881,13 @@ class ChatBot(evaluate.BaseBot):
             
             decoder_input = tf.expand_dims(
                 [self.tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_persona_states.shape[0], 1)
+            
+            context_vec = tf.zeros((1, LSTM_DIM * 4))
         
             for t in range(1, decoder_target.shape[1]):
-                predictions, _, _, *initial_state = self.decoder(
+                predictions, _, _, context_vec, *initial_state = self.decoder(
                     [decoder_input, encoder_persona_states, encoder_msg_states, 
-                     False, initial_state])
+                     False, context_vec, initial_state])
                 
                 ppl += evaluate.CCE_loss(decoder_target[:, t], predictions)
                 
