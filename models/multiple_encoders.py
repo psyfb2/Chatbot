@@ -588,7 +588,6 @@ def train_multiple_encoders(EPOCHS, BATCH_SIZE, PATIENCE, MIN_EPOCHS, deep_lstm=
 def data_pipeline(filename, tokenizer, persona_length, msg_length, out_seq_length, BATCH_SIZE, drop_remainder=True):
     ''' Load and integer encode persona chat dataset '''
     personas, data = pre.load_dataset(filename)
-    data = data[:1] # REMOVE ME
     
     encoder_persona_input  = np.array(
         [pre.START_SEQ_TOKEN + ' ' + personas[int(row[2])] + ' ' 
