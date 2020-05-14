@@ -1,3 +1,7 @@
+# -*- coding: utf-8 -*-
+"""
+@author: Fady Benattayallah
+"""
 import tensorflow as tf
 import text_preprocessing as pre
 from abc import ABCMeta, abstractmethod

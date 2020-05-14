@@ -881,7 +881,7 @@ class ChatBot(evaluate.BaseBot):
             decoder_input = tf.expand_dims(
                 [self.tokenizer.word_index[pre.START_SEQ_TOKEN]] * encoder_persona_states.shape[0], 1)
             
-            context_vec = tf.zeros((1, LSTM_DIM * 4))
+            context_vec = tf.zeros((tf.shape(encoder_persona_states)[0], LSTM_DIM * 4))
         
             for t in range(1, decoder_target.shape[1]):
                 predictions, _, _, context_vec, *initial_state = self.decoder(

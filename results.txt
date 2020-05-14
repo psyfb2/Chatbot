@@ -1,31 +1,105 @@
 seq2seq
-fluency:
-enganginess:
-consistency:
-persona:
-perplexity:
-f1:
+fluency: 1.5, 2.5, 1.5, 4.5, 2, 1.25, 2, 2            = 2.16
+enganginess: 3, 3.5, 2.75, 3.75, 3.5, 3, 3.25, 3.5    = 3.28
+consistency: 2, 3.75, 0.5, 4, 2, 3.5, 3.5, 1.5        = 2.59
+persona: 8/8
+perplexity: 46.0
+f1: 0.180
+
+Example Conversation
+----------
+Persona: i like reading mystery novels . going to the beach is my favorite past time . i love pizza . i am an american citizen . my son is a football player .
+Message: do you like pizza ?
+i do love pizza what is your favorite ? 
+
+
+Message: oh cool , I like vegitarian pizza mostly , but fast food is not good for you .
+i am a big fan of chili peppers 
+
+
+Message: what other foods do you like ?
+i like all kinds of food 
+
+
+Message: ah ok that is cool , do you have any hobbies ?
+yes , i love going to the beach . you ? 
+
+
+Message: nice , I love to play football and build chatbots .
+what is your favorite fruit ? 
+------------
+
 
 multiple encoders
-fluency:
-enganginess:
-consistency:
-persona:
-perplexity:
-f1:
+fluency: 3.5, 1.5, 0.5, 0.25, 2.5, 3.5, 1.5, 4.9   = 2.27
+enganginess: 3, 3, 1.5, 1.5, 3, 1, 3, 4            = 2.50
+consistency: 4, 3.75, 2.5, 4, 4.5, 3, 4.5          = 3.75
+persona: 8/8
+perplexity: 0.171
+f1: 44.3
+
+Example Conversation
+----------
+Persona: i am married to my wonderful husband . i am a woman . i own my own small marketing consulting agency . my favorite band is radiohead . we have two dogs small dogs .
+
+Message: hi , how are you day ?
+i am good . just got done with my wonderful dogs 
+
+Message: oh nice , how many dogs do you have ?
+i have 2 dogs . do you have a favorite band ? 
+
+Message: cool , not really I like listening to rap music more .
+what do you do for a living ? 
+
+Message: well at the moment i'm a student at the university of nottingham studying computer science , what about you ?
+i am a business owner of a business consulting agency . 
+
+Message: well that is amazing , are you rich ?
+i am . are you married ? 
+----------
 
 transformer
-fluency:
-enganginess:
-consistency:
-persona:
-perplexity:
-f1:
+fluency: 4.5
+enganginess: 4.75
+consistency: 1.5
+persona: 1/1
+perplexity: 46.3
+f1: 0.140
+
+Example Conversation
+---------
+Persona: i work at home , editing . i have a cat . i have depression and anxiety so i do not really go out a lot . i hope to move out soon . i live at home with my dad and brother .
+
+Message: hi , how are you ?
+i am good . just got done with my shift at aldi and getting ready for work . 
+
+
+Message: oh that is cool , so you have two jobs then ?
+i have a job in nyc saw some people doing crack on the way there 
+
+
+Message: lol that is really crazy , is there a lot of drugs in new york ?
+i do not think so what do you do for a living ? 
+
+
+Message: I study computer science at the university of nottingham , how about you ?
+i do not have time for that , i study a lot . what are your hobbies ? 
+
+
+Message: mostly just football and climbing , what about you ?
+i am in school studying to be a lawyer but i bartend on weekends 
+-------
 
 transformer big
 fluency:
 enganginess:
 consistency:
 persona:
-perplexity: 46.3
-f1: 0.140
+perplexity: 
+f1: 
+
+human
+fluency: 4.8
+enganginess: 4.2
+consistency:4.7
+persona: 7/7

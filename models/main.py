@@ -37,6 +37,7 @@ def input_number(prompt, limit):
             i = int(input(prompt))
         except Exception:
             print("Please only provide integer input")
+            continue
         
         if i < 0 or i > limit:
             print("Please enter an integer between 1 and %d" % limit)
@@ -118,11 +119,11 @@ if __name__ == '__main__':
     parser.add_argument("--beam_width", default=3, type=int,
                         help="Beam width to use during beam search, default = 3")
     
-    parser.add_argument("--beam_search", default=False, type=str2bool,
+    parser.add_argument("--beam_search", default=True, type=str2bool,
                         help="Use beam search")
     
     parser.add_argument("--plot_attention", default=False, type=str2bool,
-                        help="Plot attention weights for greedy search")
+                        help="Plot attention weights, only works when when beam search is off")
     # ----------- ----------- #
     
     args = parser.parse_args()
@@ -218,9 +219,8 @@ if __name__ == '__main__':
             if not args.beam_search:
                 reply = chatbot.reply(persona, msg)
             else:
-                reply = chatbot.reply(persona, msg)
-                #reply = chatbot.beam_search_reply(persona, msg, args.beam_width)
-                #reply = reply[0]
+                replys = chatbot.beam_search_reply(persona, msg, args.beam_width)
+                reply = replys[0]
             
             print(reply, "\n")
             

@@ -336,6 +336,14 @@ class Transformer(tf.keras.Model):
         
         self.output_layer = Dense(vocab_size)
     
+    @tf.function(input_signature=[[
+        tf.TensorSpec((None, None), dtype=tf.int32),
+        tf.TensorSpec((None, None), dtype=tf.int32),
+        tf.TensorSpec((None, None), dtype=tf.int32),
+        tf.TensorSpec(None, dtype=tf.bool),
+        tf.TensorSpec((None, None, None, None), dtype=tf.float32),
+        tf.TensorSpec((None, None, None, None), dtype=tf.float32),
+        tf.TensorSpec((None, None, None, None), dtype=tf.float32)]])
     def call(self, inputs):
         ''' 
         One Transformer Forward Pass
@@ -1036,30 +1044,27 @@ class ChatBot(evaluate.BaseBot):
             input_seq, out_seq)
         
             # => (batch_size, out_seq.shape[1], vocab_size)
-            pred, _ = transformer([input_seq, seg_seq, out_seq, 
+            pred, _ = self.transformer([input_seq, seg_seq, out_seq, 
                                               False, encoder_mask, look_ahead_mask,
                                               decoder_mask])
             
             # get the last word predicted by the transformer
             pred = pred[:, -1: , :]
-            logits = tf.squeeze(pred)            
+            logits = tf.squeeze(pred)        
             
             # return output and new state 
             return logits, [input_seq, seg_seq, out_seq]
         
-        sos = self.tokenizer.encode(pre.START_SEQ_TOKEN)
-        eos = self.tokenizer.encode(pre.END_SEQ_TOKEN)
+        sos = self.tokenizer.vocab_size + SOS
+        eos = self.tokenizer.vocab_size + EOS
         
         replys = beam_search(persona, message, process_inputs, pred_function, 
-                             self.reply_length, sos, eos, beam_width)
+                             self.out_seq_length, sos, eos, beam_width)
         
         replys_str = []
         for reply in replys:
-            single_reply_str = []
-            for i in reply:
-                word = pre.index_to_word(i, self.tokenizer)
-                single_reply_str.append(word)
-            replys_str.append(" ".join(single_reply_str))
+            replys_str.append(self.tokenizer.decode(
+                [w for w in reply if w < sos]))
         
         return replys_str
     
