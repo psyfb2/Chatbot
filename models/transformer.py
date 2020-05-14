@@ -28,9 +28,9 @@ NUM_HEADS = 8
 D_FF = 2048
 DROPOUT = 0.1
 
-
 #BIG Hyperparameters
 '''
+Smaller hyperparameters outperform BIG
 D_MODEL = 1024
 NUM_LAYERS = 6
 NUM_HEADS = 16

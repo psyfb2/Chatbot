@@ -59,10 +59,10 @@ i am . are you married ?
 ----------
 
 transformer
-fluency: 4.5
-enganginess: 4.75
-consistency: 1.5
-persona: 1/1
+fluency: 4.5, 2.5, 1.5, 1.5, 1.5, 1.5, 0.5, 1.25      = 1.84
+enganginess: 4.75, 4.5, 3.5, 4, 4, 3, 3, 3.5          = 3.78
+consistency: 1.5, 1.5,  2.5, 2.5, 2, 3, 1.5, 1.25     = 1.97
+persona: 6/8
 perplexity: 46.3
 f1: 0.140
 
@@ -90,16 +90,8 @@ Message: mostly just football and climbing , what about you ?
 i am in school studying to be a lawyer but i bartend on weekends 
 -------
 
-transformer big
-fluency:
-enganginess:
-consistency:
-persona:
-perplexity: 
-f1: 
-
 human
 fluency: 4.8
 enganginess: 4.2
 consistency:4.7
-persona: 7/7
+persona: 8/8
