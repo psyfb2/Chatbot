@@ -23,6 +23,7 @@ Model choices include:
 * multiple_encoders 
 * deep_multiple_encoders
 * transformer
+
 One of these should be passed to either the train, eval or talk arguments.  
 
 |      Argument Name      |                            Description                           |   Default Value   |
@@ -44,7 +45,8 @@ One of these should be passed to either the train, eval or talk arguments.
 | beam_search             | Use beam search?                                                 | True              |
 | plot_attention          | Plot attention weights, requires beam_search to be false.        | False             |
   
-The CLI is at the directory chatbot/models/main.py  
+The CLI is at the directory chatbot/models/main.py 
+   
 Example usage to train Seq2Seq model:  
 `python main.py --train seq2seq`  
 Example usage to evaluate Multiple Encoders model:  
@@ -61,5 +63,5 @@ Evaluation results can be found at chatbot/models/results.txt
 ## Website ##
 The models are deployed using a Flask backend.  
 The live version can be found here:  
-[Live Version]("https://cloud.google.com/appengine/docs/standard/python3/building-app/deploying-web-service" "Live Version")
+[Live Version](https://cloud.google.com/appengine/docs/standard/python3/building-app/deploying-web-service "Live Version")
 
