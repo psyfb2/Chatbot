@@ -335,7 +335,11 @@ class Transformer(tf.keras.Model):
                                decoder_embedding, output_max_pos, dropout)
         
         self.output_layer = Dense(vocab_size)
-    
+        
+    '''
+    uncomment for faster inference, however some systems use tf.int32
+    whereas others may use tf.int64. Empty input_signature causes
+    constant graph retracing.
     @tf.function(input_signature=[[
         tf.TensorSpec((None, None), dtype=tf.int32),
         tf.TensorSpec((None, None), dtype=tf.int32),
@@ -344,6 +348,7 @@ class Transformer(tf.keras.Model):
         tf.TensorSpec((None, None, None, None), dtype=tf.float32),
         tf.TensorSpec((None, None, None, None), dtype=tf.float32),
         tf.TensorSpec((None, None, None, None), dtype=tf.float32)]])
+    '''
     def call(self, inputs):
         ''' 
         One Transformer Forward Pass

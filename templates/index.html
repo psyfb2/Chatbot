@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script>window.jQuery || document.write('<script src="{{
+  url_for('static', filename='jquery.js') }}">\x3C/script>')</script>
+  <title>ChatBot</title>
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+  <script type=text/javascript>
+	$SCRIPT_ROOT = {{ request.script_root|tojson|safe }};
+  </script>
+  <link type="text/css" rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
+</head>
+<body>
+
+<div class="header">
+	<div class="header-container clearfix">
+		
+		<div class="title">
+			🤖 Deep Learning Chatbot
+		</div>
+		
+		<div class="links">
+			<a target="_blank" href="https://www.linkedin.com/in/fady42/">
+			<img src="/static/img/linkedin.png">
+			</a>
+			
+			<a target="_blank" href="https://github.com/psyfb2/Chatbot">
+			<img src="/static/img/github.svg">
+			</a>
+		</div>
+	</div>
+</div>
+
+<div class="subheader clearfix">
+	<div class="subheader-text">
+		This chatbot has been built with the aim of keeping a consistent persona.
+		Three models have been trained each with their own advantages.
+		You can change the model at any time!
+	</div>
+	
+	<div class="subheader-selection">		
+		<select name="sources" id="sources" class="custom-select sources" placeholder="Seq2Seq">
+			<option value="seq2seq">Seq2Seq</option>
+			<option value="transformer">Transformer</option>
+			<option value="multiple">Multiple Encoders</option>
+		</select>
+	</div>
+</div>
+
+<div class="persona-container">
+	<hr>
+	<div class="clearfix">
+		<div class="persona-title">
+			Chatbot Persona
+		</div>
+		<div class="links">
+			<a href="#" class="persona-change">Change
+			<img src="/static/img/change.png">
+			</a>
+		</div>
+	</div>
+	
+	<div class="persona-text">
+	</div>
+</div>
+
+<div class="chat-container">
+	<div class="messages">
+	</div>
+	<div class="message-input">
+		<div class="input-container">
+			<form id="message-form">
+				<div class="message-input-container">
+					<input class="enter-message" type="text" name="enter-message" placeholder="Enter a message..." autocomplete="off" autofocus>
+				</div>
+				<button class="message-button">Send</button>
+			</form
+		</div>
+	</div>
+</div>
+
+</body>
+</html>

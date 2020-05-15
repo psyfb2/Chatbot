@@ -543,6 +543,6 @@ if __name__ == '__main__':
     #conversations = load_movie_dataset(MOVIE_FN, verbose=1)
     #dialogue_conversations = load_dailydialogue_dataset(DAILYDIALOGUE_FN, verbose=1)
     #vocab, persona_length, message_length, reply_length = get_vocab(True, verbose=1)
-    print(get_only_personas())
+    print(get_only_personas()[50])
     
     
