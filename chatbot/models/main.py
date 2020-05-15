@@ -100,8 +100,8 @@ if __name__ == '__main__':
     parser.add_argument("--verbose", default=0, type=int,
                         help="Display loss for each batch during training")
     
-    parser.add_argument("--min_epochs", default=50, type=int,
-                        help="a minimum number of epochs which the model must be trained for on the PERSONA-CHAT dataset regardless of early stopping")
+    parser.add_argument("--min_epochs", default=30, type=int,
+                        help="a minimum number of epochs which the model must be trained for on the PERSONA-CHAT dataset regardless of early stopping. Reccomended 30 for seq2seq, 15 for multiple_encoders, 80+ for transformer")
     
     parser.add_argument("--glove_filename", default="glove.6B.300d.txt", type=str,
                         help="The GLoVe filename to use e.g. glove.840B.300d.txt. Will automatically prepend data path")
