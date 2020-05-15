@@ -4,6 +4,7 @@ Models trained include:
 * Sequence to Sequence
 * Transformer
 * Multiple Encoders  
+
 This project consists of a Flask Website and Command Line Interface.
 
 ## Installation ##
