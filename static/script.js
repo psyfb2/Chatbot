@@ -1114,7 +1114,7 @@ $(document).ready(function(){
 				
 				// display reply
 				elem = '<div class="message from-bot">' +
-					   '<div class=message-box>' + data.result +
+					   '<div class=message-box>' + postprocess(data.result) +
 					   '</div></div>';
 				$('.messages').append(elem);
 				

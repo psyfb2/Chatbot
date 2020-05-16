@@ -198,12 +198,8 @@ if __name__ == '__main__':
         personas = persona
         persona = persona[persona_num]
         
-        if random.randint(100, 1000) % 2 == 0:
-            print("Persona: %s\n" % persona)
-            print("Persona: %s\n" % personas[random.randint(0, 500)])
-        else:
-            print("Persona: %s\n" % personas[random.randint(0, 500)])
-            print("Persona: %s\n" % persona)
+
+        print("Persona: %s\n" % persona)
             
         
         print("Talking with %s model, enter <exit> to close this program\n" % args.talk)
@@ -228,5 +224,3 @@ if __name__ == '__main__':
                 # keeping track of attention weights for beams is costly
                 # so only do this for greedy search
                 chatbot.plot_attn()
-        
-        print("Persona: %s\n" % persona)

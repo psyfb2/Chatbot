@@ -1124,7 +1124,7 @@ class ChatBot(evaluate.BaseBot):
 
 if __name__ == "__main__":
     # do some tests to ensure Encoder and Decoder have correct dimensionality
-
+    
     # Key matrix, these will be matched with the query using dot product attention
     k = tf.constant([[50, 0, 0],
                     [0, 50, 0],

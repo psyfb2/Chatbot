@@ -729,7 +729,7 @@ class ChatBot(evaluate.BaseBot):
         None.
 
         '''
-        if self.attn_weights == None:
+        if self.attn_weights is None:
             return
         pre.plot_attention(self.attn_weights, self.last_input, self.last_reply)
     

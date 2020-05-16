@@ -35,8 +35,8 @@ fluency: 3.5, 1.5, 0.5, 0.25, 2.5, 3.5, 1.5, 4.9   = 2.27
 enganginess: 3, 3, 1.5, 1.5, 3, 1, 3, 4            = 2.50
 consistency: 4, 3.75, 2.5, 4, 4.5, 3, 4.5          = 3.75
 persona: 8/8
-perplexity: 0.171
-f1: 44.3
+perplexity: 44.3
+f1: 0.171
 
 Example Conversation
 ----------
@@ -91,7 +91,7 @@ i am in school studying to be a lawyer but i bartend on weekends
 -------
 
 human
-fluency: 4.8
-enganginess: 4.2
-consistency:4.7
+fluency: 4.6
+enganginess: 4.0
+consistency:4.6
 persona: 8/8

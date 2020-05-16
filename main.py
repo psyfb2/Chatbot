@@ -55,7 +55,7 @@ def get_reply():
 
 
 @app.route('/')
-def index():
+def root():
     return render_template('index.html')
 
 

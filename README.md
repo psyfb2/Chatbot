@@ -14,8 +14,8 @@ git clone https://github.com/psyfb2/Chatbot.git
 cd Chatbot/chatbot
 pip install -r requirements.txt
 ```
-GloVe file is not included in this github repository because of it's large size.
-Download [Glove.6B.zip](http://nlp.stanford.edu/data/glove.6B.zip "Glove File") and extract glove.6B.300d.txt into /chatbot/data folder.
+GloVe embedding file is not included in this github repository because of it's large size.
+Download [GloVe.6B.zip](http://nlp.stanford.edu/data/glove.6B.zip "Glove File") and extract glove.6B.300d.txt into /chatbot/data folder.
 
 ## Command Line Interface ##
 The CLI is responsible for training, evaluating and interacting with the models.  
@@ -64,5 +64,5 @@ Evaluation results can be found at chatbot/models/results.txt
   
 ## Website ##
 The models are deployed using a Flask backend.  
-The live version can be found here: [Live Version](https://cloud.google.com/appengine/docs/standard/python3/building-app/deploying-web-service "Live Version")
+The live version can be found here: [Live Version](https://fady-website.ew.r.appspot.com "Live Version")
 
