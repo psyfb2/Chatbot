@@ -64,5 +64,5 @@ Evaluation results can be found at chatbot/models/results.txt
   
 ## Website ##
 The models are deployed using a Flask backend.  
-The live version can be found here: [Live Version](http://fady-website.ew.r.appspot.com "Live Version")
+The live version can be found here (currently down but will be up again soon): [Live Version](http://fady-website.ew.r.appspot.com "Live Version")
 
