@@ -6,6 +6,7 @@ Models trained include:
 * Multiple Encoders  
 
 This project consists of a Flask Website and Command Line Interface.
+Watch a demo: https://www.youtube.com/watch?v=1Prv4J6LOuM&feature=youtu.be
 
 ## Installation ##
 To install the Command Line Interface, first install python3 and then use the following steps:  
