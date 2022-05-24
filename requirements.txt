@@ -1,7 +1,7 @@
 Flask==1.1.2
 gunicorn == 20.0.4
 keras == 2.3.1
-tensorflow == 2.0.0b1
+tensorflow == 2.6.4
 numpy == 1.18.1
 scikit-learn == 0.20.2
 matplotlib == 3.1.3
